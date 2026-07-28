@@ -109,7 +109,8 @@ export default function App() {
 
       if (!response.ok) {
         const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.error || 'Test senaryoları üretilirken sunucu hatası oluştu.');
+        const detailMsg = errJson.details ? `: ${errJson.details}` : '';
+        throw new Error((errJson.error || 'Test senaryoları üretilirken sunucu hatası oluştu.') + detailMsg);
       }
 
       const data: GenerationResult = await response.json();

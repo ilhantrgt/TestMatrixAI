@@ -80,7 +80,7 @@ ${config.customInstructions ? `Additional User Testing Guidelines: ${config.cust
 `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-2.5-flash',
       contents: [
         {
           role: 'user',
@@ -287,7 +287,7 @@ app.post('/api/refine-test-cases', async (req, res) => {
     const ai = getGenAIClient();
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-2.5-flash',
       contents: [
         {
           role: 'user',
