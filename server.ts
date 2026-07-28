@@ -455,6 +455,8 @@ app.post('/api/jira/create-issue', async (req, res) => {
   }
 });
 
+export default app;
+
 // Vite middleware for dev / express static serving for prod
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -476,4 +478,7 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
