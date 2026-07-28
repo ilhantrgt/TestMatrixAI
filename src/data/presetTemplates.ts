@@ -2,6 +2,23 @@ import { ExcelTemplateConfig } from '../types';
 
 export const PRESET_TEMPLATES: ExcelTemplateConfig[] = [
   {
+    templateName: 'Türk Telekom Geliştirme Test Durum Şablonu',
+    sheetName: 'Test Durumları',
+    headerRowIndex: 0,
+    columns: [
+      { id: 'tt_col_1', name: 'Test Durum No', mappedField: 'reqId', width: 16 },
+      { id: 'tt_col_2', name: 'Test Adım No', mappedField: 'testCaseId', width: 16 },
+      { id: 'tt_col_3', name: 'Sistem', mappedField: 'module', width: 20 },
+      { id: 'tt_col_4', name: 'Test Adım Ön Koşulu (Varsa)', mappedField: 'preconditions', width: 28 },
+      { id: 'tt_col_5', name: 'Ön Koşulu Sağlayacak Sistem (Varsa)', mappedField: 'custom', customKey: 'prereqSystem', defaultValue: 'İlgili Sistem', width: 24 },
+      { id: 'tt_col_6', name: 'Test Adım Verisi (Varsa)', mappedField: 'testData', width: 25 },
+      { id: 'tt_col_7', name: 'Aksiyon', mappedField: 'steps', width: 45 },
+      { id: 'tt_col_8', name: 'Beklenen Sonuç', mappedField: 'expectedResult', width: 40 },
+      { id: 'tt_col_9', name: 'Gerçekleşen Sonuç (Geçti/Kaldı/Koşturulmadı)', mappedField: 'custom', customKey: 'executionStatus', defaultValue: 'Koşturulmadı', width: 28 },
+      { id: 'tt_col_10', name: 'Açıklama', mappedField: 'description', width: 30 },
+    ],
+  },
+  {
     templateName: 'Kurumsal ISTQB Standart (TR)',
     sheetName: 'Test Scenarios',
     headerRowIndex: 0,

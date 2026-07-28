@@ -7,25 +7,28 @@ import { ExcelTemplateConfig, MappedFieldType, RequirementItem, TemplateColumn, 
 export function autoDetectFieldMapping(headerName: string): MappedFieldType {
   const lower = headerName.toLowerCase().trim();
 
-  if (lower.includes('tc id') || lower.includes('test case id') || lower.includes('test no') || lower.includes('test_id')) {
+  if (lower.includes('test adım no') || lower.includes('tc id') || lower.includes('test case id') || lower.includes('test_id')) {
     return 'testCaseId';
   }
-  if (lower.includes('req') || lower.includes('gereksinim') || lower.includes('requirement') || lower.includes('us id') || lower.includes('jira key')) {
+  if (lower.includes('test durum no') || lower.includes('req') || lower.includes('gereksinim') || lower.includes('requirement') || lower.includes('us id') || lower.includes('jira key')) {
     return 'reqId';
   }
-  if (lower.includes('modül') || lower.includes('module') || lower.includes('component') || lower.includes('özellik') || lower.includes('feature')) {
+  if (lower === 'sistem' || lower.includes('modül') || lower.includes('module') || lower.includes('component') || lower.includes('özellik') || lower.includes('feature')) {
     return 'module';
   }
-  if (lower.includes('başlık') || lower.includes('title') || lower.includes('summary') || lower.includes('senaryo adı') || lower.includes('test adı')) {
+  if (lower.includes('başlık') || lower.includes('title') || lower.includes('summary') || lower.includes('senaryo adı') || lower.includes('test durum adı') || lower.includes('test adı')) {
     return 'title';
   }
   if (lower.includes('açıklama') || lower.includes('description') || lower.includes('tanım')) {
     return 'description';
   }
+  if (lower.includes('sağlayacak')) {
+    return 'custom';
+  }
   if (lower.includes('ön koşul') || lower.includes('precondition') || lower.includes('pre-condition') || lower.includes('hazırlık')) {
     return 'preconditions';
   }
-  if (lower.includes('adım') || lower.includes('step') || lower.includes('action') || lower.includes('islem')) {
+  if (lower.includes('aksiyon') || lower.includes('adım') || lower.includes('step') || lower.includes('action') || lower.includes('islem')) {
     return 'steps';
   }
   if (lower.includes('veri') || lower.includes('data') || lower.includes('input') || lower.includes('girdi')) {
@@ -56,37 +59,51 @@ export function autoDetectFieldMapping(headerName: string): MappedFieldType {
 export async function parseUploadedExcelTemplate(file: File): Promise<ExcelTemplateConfig> {
   const data = await file.arrayBuffer();
   const workbook = XLSX.read(data, { type: 'array' });
-  const sheetName = workbook.SheetNames[0] || 'Sheet1';
-  const worksheet = workbook.Sheets[sheetName];
+  
+  if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+    throw new Error('Yüklenen Excel dosyasında sayfa bulunamadı.');
+  }
 
-  // Convert worksheet to JSON rows to get headers
+  // Find best target sheet (prefer "Test Durumları", "Test Scenarios", "Tests", or sheets with multiple columns)
+  let selectedSheetName = workbook.SheetNames[0];
+  const preferredSheet = workbook.SheetNames.find((name) => {
+    const l = name.toLowerCase();
+    return l.includes('test durum') || l.includes('scenario') || l.includes('senaryo') || l.includes('test');
+  });
+
+  if (preferredSheet) {
+    selectedSheetName = preferredSheet;
+  }
+
+  const worksheet = workbook.Sheets[selectedSheetName];
   const jsonRows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1 });
   
   if (!jsonRows || jsonRows.length === 0) {
-    throw new Error('Yüklenen Excel dosyasında içerik bulunamadı.');
+    throw new Error('Yüklenen Excel sayfasında içerik bulunamadı.');
   }
 
-  // Find header row (usually row 0 or first non-empty row)
+  // Find header row (scan rows 0-15 for row with most non-empty text cells)
   let headerRowIndex = 0;
   let rawHeaders: string[] = [];
+  let maxColsCount = 0;
 
-  for (let i = 0; i < Math.min(5, jsonRows.length); i++) {
+  for (let i = 0; i < Math.min(15, jsonRows.length); i++) {
     const row = jsonRows[i] as unknown[];
     if (row && Array.isArray(row) && row.length > 0) {
-      const stringCols = row.map((cell) => String(cell || '').trim()).filter(Boolean);
-      if (stringCols.length > 0) {
+      const stringCols = row.map((cell) => String(cell || '').trim()).filter((str) => str.length > 0);
+      if (stringCols.length > maxColsCount) {
+        maxColsCount = stringCols.length;
         headerRowIndex = i;
         rawHeaders = row.map((cell) => String(cell || '').trim());
-        break;
       }
     }
   }
 
-  if (rawHeaders.length === 0) {
+  if (rawHeaders.length === 0 || maxColsCount === 0) {
     throw new Error('Excel dosyasında geçerli sütun başlıkları saptanamadı.');
   }
 
-  // Filter out empty trailing columns
+  // Filter out trailing empty header names
   const validHeaders = rawHeaders.filter((h) => h.length > 0);
 
   const columns: TemplateColumn[] = validHeaders.map((headerText, index) => {
@@ -95,17 +112,53 @@ export async function parseUploadedExcelTemplate(file: File): Promise<ExcelTempl
       id: `custom_col_${index}_${Date.now()}`,
       name: headerText,
       mappedField,
-      width: Math.max(headerText.length + 8, 20),
+      width: Math.max(headerText.length + 8, 18),
     };
   });
 
   return {
     templateName: file.name.replace(/\.[^/.]+$/, '') + ' (Özel Şablon)',
-    sheetName,
+    sheetName: selectedSheetName,
     columns,
     headerRowIndex,
     isCustomUploaded: true,
   };
+}
+
+/**
+ * Helper to parse any uploaded Excel file into clean requirement text
+ */
+export async function parseExcelToRequirementText(file: File): Promise<string> {
+  const data = await file.arrayBuffer();
+  const workbook = XLSX.read(data, { type: 'array' });
+  
+  const textParts: string[] = [];
+
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
+    
+    if (rows && rows.length > 0) {
+      textParts.push(`=== SAYFA: ${sheetName} ===`);
+      rows.forEach((row, idx) => {
+        const rowStr = Object.entries(row)
+          .map(([key, val]) => {
+            const cleanVal = String(val).trim();
+            if (!cleanVal) return null;
+            return `${key}: ${cleanVal}`;
+          })
+          .filter(Boolean)
+          .join(' | ');
+
+        if (rowStr) {
+          textParts.push(`[Satır ${idx + 1}] ${rowStr}`);
+        }
+      });
+      textParts.push('');
+    }
+  });
+
+  return textParts.join('\n');
 }
 
 /**

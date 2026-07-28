@@ -162,8 +162,20 @@ ${config.customInstructions ? `Additional User Testing Guidelines: ${config.cust
       },
     });
 
-    const jsonText = response.text || '{}';
-    const parsedData = JSON.parse(jsonText);
+    let jsonText = response.text || '{}';
+    jsonText = jsonText
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+
+    let parsedData: any = {};
+    try {
+      parsedData = JSON.parse(jsonText);
+    } catch (parseErr) {
+      console.error('JSON parse error on Gemini output:', jsonText);
+      throw new Error('Yapay zeka yanıtı geçerli JSON formatında ayrıştırılamadı.');
+    }
 
     // Process requirement coverage items
     const rawRequirements = parsedData.requirements || [];

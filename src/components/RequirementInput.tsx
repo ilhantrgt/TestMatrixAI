@@ -13,6 +13,7 @@ import {
   Code,
   FileSpreadsheet,
 } from 'lucide-react';
+import { parseExcelToRequirementText } from '../utils/excelHelper';
 import { GenerationConfig, SampleRequirementDoc } from '../types';
 import { SAMPLE_REQUIREMENT_DOCS } from '../data/sampleRequirements';
 
@@ -45,9 +46,26 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
     setActiveTab('paste');
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const fileName = file.name.toLowerCase();
+
+    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+      try {
+        const text = await parseExcelToRequirementText(file);
+        if (text && text.trim()) {
+          onChangeRequirementText(text);
+          setActiveTab('paste');
+        } else {
+          alert('Excel dosyasında okunabilir metin bulunamadı.');
+        }
+      } catch (err: any) {
+        alert('Excel dosyası okunurken hata oluştu: ' + (err?.message || 'Geçersiz dosya'));
+      }
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -167,7 +185,7 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
         <div className="border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-slate-950/40 rounded-xl p-8 text-center transition-colors">
           <input
             type="file"
-            accept=".txt,.md,.json,.csv,.doc,.docx"
+            accept=".xlsx,.xls,.txt,.md,.json,.csv,.doc,.docx"
             onChange={handleFileUpload}
             className="hidden"
             id="req-file-upload"
@@ -178,7 +196,7 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
             </div>
             <div>
               <p className="text-sm font-bold text-white">Gereksinim Dökümanı Dosyası Yükleyin</p>
-              <p className="text-xs text-slate-400 mt-1">.TXT, .MD, .JSON veya metin dökümanları desteklenmektedir.</p>
+              <p className="text-xs text-slate-400 mt-1">.XLSX, .XLS, .TXT, .MD, .JSON veya .CSV dökümanları desteklenmektedir.</p>
             </div>
           </label>
         </div>
