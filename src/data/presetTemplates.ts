@@ -1,0 +1,56 @@
+import { ExcelTemplateConfig } from '../types';
+
+export const PRESET_TEMPLATES: ExcelTemplateConfig[] = [
+  {
+    templateName: 'Kurumsal ISTQB Standart (TR)',
+    sheetName: 'Test Scenarios',
+    headerRowIndex: 0,
+    columns: [
+      { id: 'col_1', name: 'Test Case ID', mappedField: 'testCaseId', width: 16 },
+      { id: 'col_2', name: 'Gereksinim kodu', mappedField: 'reqId', width: 16 },
+      { id: 'col_3', name: 'Modül / Özellik', mappedField: 'module', width: 22 },
+      { id: 'col_4', name: 'Test Senaryosu Başlığı', mappedField: 'title', width: 35 },
+      { id: 'col_5', name: 'Ön Koşullar', mappedField: 'preconditions', width: 28 },
+      { id: 'col_6', name: 'Test Adımları', mappedField: 'steps', width: 45 },
+      { id: 'col_7', name: 'Test Verisi', mappedField: 'testData', width: 25 },
+      { id: 'col_8', name: 'Beklenen Sonuç', mappedField: 'expectedResult', width: 40 },
+      { id: 'col_9', name: 'Öncelik', mappedField: 'priority', width: 12 },
+      { id: 'col_10', name: 'Test Tipi', mappedField: 'testType', width: 16 },
+      { id: 'col_11', name: 'Çalıştırma Türü', mappedField: 'executionType', width: 14 },
+      { id: 'col_12', name: 'Önem Derecesi (Severity)', mappedField: 'severity', width: 16 },
+    ],
+  },
+  {
+    templateName: 'Jira / Xray Import Format (EN)',
+    sheetName: 'Tests',
+    headerRowIndex: 0,
+    columns: [
+      { id: 'col_j1', name: 'Issue Type', mappedField: 'custom', defaultValue: 'Test', width: 14 },
+      { id: 'col_j2', name: 'Test ID', mappedField: 'testCaseId', width: 16 },
+      { id: 'col_j3', name: 'Requirement Key', mappedField: 'reqId', width: 18 },
+      { id: 'col_j4', name: 'Summary', mappedField: 'title', width: 35 },
+      { id: 'col_j5', name: 'Component', mappedField: 'module', width: 20 },
+      { id: 'col_j6', name: 'Pre-Conditions', mappedField: 'preconditions', width: 28 },
+      { id: 'col_j7', name: 'Test Step', mappedField: 'steps', width: 45 },
+      { id: 'col_j8', name: 'Test Data', mappedField: 'testData', width: 22 },
+      { id: 'col_j9', name: 'Expected Result', mappedField: 'expectedResult', width: 40 },
+      { id: 'col_j10', name: 'Priority', mappedField: 'priority', width: 12 },
+      { id: 'col_j11', name: 'Test Type', mappedField: 'testType', width: 16 },
+    ],
+  },
+  {
+    templateName: 'Azure DevOps Test Suite',
+    sheetName: 'Test Cases',
+    headerRowIndex: 0,
+    columns: [
+      { id: 'col_a1', name: 'ID', mappedField: 'testCaseId', width: 14 },
+      { id: 'col_a2', name: 'Work Item Type', mappedField: 'custom', defaultValue: 'Test Case', width: 16 },
+      { id: 'col_a3', name: 'Title', mappedField: 'title', width: 35 },
+      { id: 'col_a4', name: 'Area Path', mappedField: 'module', width: 20 },
+      { id: 'col_a5', name: 'Requirement ID', mappedField: 'reqId', width: 16 },
+      { id: 'col_a6', name: 'Action Steps', mappedField: 'steps', width: 45 },
+      { id: 'col_a7', name: 'Step Expected', mappedField: 'expectedResult', width: 40 },
+      { id: 'col_a8', name: 'Priority', mappedField: 'priority', width: 12 },
+    ],
+  },
+];
