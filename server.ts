@@ -57,30 +57,39 @@ app.post('/api/generate-test-cases', async (req, res) => {
       : 'Standard ISTQB Columns';
 
     const systemPrompt = `You are a Senior Principal Software Test Automation Engineer (ISTQB Certified).
-Your goal is to carefully analyze the provided Software Requirements Specification (SRS) or User Stories, extract distinct requirement items (e.g., REQ-001, REQ-002, US-01), and auto-generate comprehensive, professional, industry-standard test cases.
+Your goal is to carefully analyze the provided Software Requirements Specification (SRS) or User Stories, extract distinct requirement items (e.g., REQ-001, REQ-002, US-01), and auto-generate comprehensive, professional, industry-standard test cases following standard ISTQB Test Types and Techniques.
 
 The output MUST be in ${config.language === 'en' ? 'English' : 'Turkish'}.
 
-Follow these QA Best Practices:
+Follow these ISTQB CTFL QA Best Practices:
 1. Break down the requirement document into individual Requirement Items with ID, Title, and Description.
-2. For EACH Requirement Item, generate:
-   - Positive Test Cases (Happy path verification)
-   - Negative Test Cases (Validation errors, invalid inputs, unauthorized actions, edge failures)
-   ${config.includeBoundary ? '- Boundary Value Analysis (BVA) & Equivalence Partitioning test cases' : ''}
-   ${config.includeSecurity ? '- Security & Permission check test cases (Injection, RBAC, Data privacy, Session)' : ''}
-   ${config.includePerformance ? '- Basic Performance & Timeout test cases' : ''}
+2. For EACH Requirement Item, generate test cases spanning appropriate ISTQB test categories:
+   - Functional Testing:
+     * Pozitif (Fonksiyonel Doğruluk) - Happy path verification
+     * Negatif (Hata Yönetimi) - Validation errors, invalid inputs, edge failures
+     * Sınır Değer Analizi (BVA) & Eşdeğer Sınıflandırma (EP)
+     * Durum Geçiş Testi (State Transition) / Karar Tablosu (Decision Table) / Kullanım Senaryosu (Use Case)
+   - Non-Functional Testing:
+     ${config.includeSecurity ? '* Güvenlik ve Yetki Testi (Security, Auth, RBAC, Injection, Session)' : ''}
+     ${config.includePerformance ? '* Performans Testi (Performance, Load, Latency, Timeouts)' : ''}
+     ${config.includeUsability ? '* Kullanılabilirlik Testi (Usability / UX)' : ''}
+     ${config.includeCompatibility ? '* Uyumluluk ve Çapraz Platform (Compatibility)' : ''}
+   - Change-Related & Acceptance:
+     ${config.includeUAT ? '* Kullanıcı Kabul Testi (UAT)' : ''}
+     ${config.includeRegression ? '* Regresyon Testi (Regression)' : ''}
 3. Test steps must be numbered, clear, step-by-step instructions.
 4. Provide concrete, realistic Test Data (e.g. sample credit cards, IBANs, boundary numbers).
 5. Provide unambiguous, clear Expected Results.
 6. Categorize Priority as Yüksek/Orta/Düşük (or High/Medium/Low) and Severity as Kritik/Yüksek/Normal/Düşük.
-7. Categorize Test Type accurately: Pozitif, Negatif, Sınır Değer (Boundary), Güvenlik, Performans, Kullanılabilirlik.
+7. Categorize Test Type precisely using standard ISTQB types:
+   "Pozitif (Fonksiyonel Doğruluk)", "Negatif (Hata Yönetimi)", "Sınır Değer Analizi (BVA)", "Eşdeğer Sınıflandırma (EP)", "Durum Geçiş Testi (State Transition)", "Karar Tablosu Testi (Decision Table)", "Kullanım Senaryosu Testi (Use Case)", "Performans Testi (Performance)", "Yük ve Stres Testi (Load & Stress)", "Güvenlik ve Yetki Testi (Security)", "Kullanılabilirlik Testi (Usability / UX)", "Uyumluluk ve Çapraz Platform (Compatibility)", "Erişilebilirlik Testi (Accessibility / WCAG)", "Regresyon Testi (Regression)", "Kullanıcı Kabul Testi (UAT)", "Sistem Entegrasyon Testi (SIT)".
 
 Target Export Column Mapping structure: ${columnNamesList}
 ${config.customInstructions ? `Additional User Testing Guidelines: ${config.customInstructions}` : ''}
 `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       contents: [
         {
           role: 'user',
@@ -134,7 +143,8 @@ ${config.customInstructions ? `Additional User Testing Guidelines: ${config.cust
                   priority: { type: Type.STRING, description: 'Yüksek, Orta, or Düşük' },
                   testType: {
                     type: Type.STRING,
-                    description: 'Pozitif, Negatif, Sınır Değer (Boundary), Güvenlik, Performans, veya Kullanılabilirlik',
+                    description:
+                      'Standard ISTQB Test Type (e.g., Pozitif (Fonksiyonel Doğruluk), Negatif (Hata Yönetimi), Sınır Değer Analizi (BVA), Eşdeğer Sınıflandırma (EP), Durum Geçiş Testi (State Transition), Karar Tablosu Testi (Decision Table), Kullanım Senaryosu Testi (Use Case), Performans Testi (Performance), Güvenlik ve Yetki Testi (Security), Kullanılabilirlik Testi (Usability / UX), Uyumluluk ve Çapraz Platform (Compatibility), Regresyon Testi (Regression), Kullanıcı Kabul Testi (UAT))',
                   },
                   executionType: { type: Type.STRING, description: 'Manuel or Otomasyon' },
                   severity: { type: Type.STRING, description: 'Kritik, Yüksek, Normal, or Düşük' },
@@ -287,7 +297,7 @@ app.post('/api/refine-test-cases', async (req, res) => {
     const ai = getGenAIClient();
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       contents: [
         {
           role: 'user',

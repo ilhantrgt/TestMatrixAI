@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { RequirementInput } from './components/RequirementInput';
 import { TemplateConfiguratorModal } from './components/TemplateConfiguratorModal';
@@ -8,6 +8,7 @@ import { StatsSummaryPanel } from './components/StatsSummaryPanel';
 import { CoverageReportView } from './components/CoverageReportView';
 import { TestExecutionView } from './components/TestExecutionView';
 import { JiraModal } from './components/JiraModal';
+import { AddTestCaseModal } from './components/AddTestCaseModal';
 import { PRESET_TEMPLATES } from './data/presetTemplates';
 import { SAMPLE_REQUIREMENT_DOCS } from './data/sampleRequirements';
 import {
@@ -17,8 +18,10 @@ import {
   RequirementItem,
   TestCase,
   JiraConfig,
+  TestRun,
 } from './types';
 import { exportTestCasesToExcel } from './utils/excelHelper';
+import { generateNextTestCaseId } from './utils/idGenerator';
 import {
   FileSpreadsheet,
   Layers,
@@ -52,6 +55,15 @@ export default function App() {
   );
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
 
+  // Add Manual Test Case Modal State
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [selectedReqForAddModal, setSelectedReqForAddModal] = useState<string | undefined>(undefined);
+
+  const handleOpenAddModal = (reqId?: string) => {
+    setSelectedReqForAddModal(reqId);
+    setIsAddModalOpen(true);
+  };
+
   // Jira Integration State
   const [isJiraModalOpen, setIsJiraModalOpen] = useState(false);
   const [jiraConfig, setJiraConfig] = useState<JiraConfig>(() => {
@@ -81,11 +93,94 @@ export default function App() {
   const [isRefiningReqId, setIsRefiningReqId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Result States
-  const [requirements, setRequirements] = useState<RequirementItem[]>([]);
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
-  const [generationStats, setGenerationStats] = useState<any | null>(null);
+  // Result & Execution States (Persisted in localStorage)
+  const [requirements, setRequirements] = useState<RequirementItem[]>(() => {
+    const saved = localStorage.getItem('tm_requirements');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [];
+  });
+
+  const [testCases, setTestCases] = useState<TestCase[]>(() => {
+    const saved = localStorage.getItem('tm_test_cases');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [];
+  });
+
+  const [generationStats, setGenerationStats] = useState<any | null>(() => {
+    const saved = localStorage.getItem('tm_generation_stats');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return null;
+  });
+
   const [recommendations, setRecommendations] = useState<string[]>([]);
+
+  const [testRuns, setTestRuns] = useState<TestRun[]>(() => {
+    const saved = localStorage.getItem('tm_test_runs');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [
+      {
+        id: 'RUN-1',
+        name: 'Sprint 24 Regresyon Test Koşumu',
+        environment: 'Staging Env-1',
+        createdAt: new Date().toISOString().slice(0, 10),
+        executions: {},
+      },
+    ];
+  });
+
+  const [activeRunId, setActiveRunId] = useState<string>(() => {
+    const saved = localStorage.getItem('tm_active_run_id');
+    return saved || 'RUN-1';
+  });
+
+  // Sync states to localStorage
+  useEffect(() => {
+    localStorage.setItem('tm_requirements', JSON.stringify(requirements));
+  }, [requirements]);
+
+  useEffect(() => {
+    localStorage.setItem('tm_test_cases', JSON.stringify(testCases));
+  }, [testCases]);
+
+  useEffect(() => {
+    if (generationStats) {
+      localStorage.setItem('tm_generation_stats', JSON.stringify(generationStats));
+    } else {
+      localStorage.removeItem('tm_generation_stats');
+    }
+  }, [generationStats]);
+
+  useEffect(() => {
+    localStorage.setItem('tm_test_runs', JSON.stringify(testRuns));
+  }, [testRuns]);
+
+  useEffect(() => {
+    localStorage.setItem('tm_active_run_id', activeRunId);
+  }, [activeRunId]);
 
   const [activeTab, setActiveTab] = useState<'matrix' | 'execution' | 'coverage' | 'rtm' | 'stats'>('matrix');
 
@@ -131,11 +226,12 @@ export default function App() {
   const handleRefineRequirement = async (
     reqId: string,
     promptInstruction: string
-  ) => {
+  ): Promise<number> => {
     const reqObj = requirements.find((r) => r.id === reqId);
-    if (!reqObj) return;
+    if (!reqObj) return 0;
 
     setIsRefiningReqId(reqId);
+    let addedCount = 0;
     try {
       const existing = testCases.filter((tc) => tc.reqId === reqId);
       const response = await fetch('/api/refine-test-cases', {
@@ -152,7 +248,33 @@ export default function App() {
       if (response.ok) {
         const resData = await response.json();
         if (resData.newTestCases && resData.newTestCases.length > 0) {
-          setTestCases((prev) => [...prev, ...resData.newTestCases]);
+          addedCount = resData.newTestCases.length;
+          setTestCases((prev) => {
+            const newCasesWithSequentialIds: TestCase[] = [];
+            let currentList = [...prev];
+            for (const rawTc of resData.newTestCases) {
+              const sequentialId = generateNextTestCaseId(reqId, currentList);
+              const formattedTc: TestCase = {
+                ...rawTc,
+                id: sequentialId,
+                reqId: reqId,
+              };
+              newCasesWithSequentialIds.push(formattedTc);
+              currentList.push(formattedTc);
+            }
+            return currentList;
+          });
+          setRequirements((prevReqs) =>
+            prevReqs.map((r) =>
+              r.id === reqId
+                ? {
+                    ...r,
+                    coverageStatus: 'Full',
+                    gapDescription: undefined,
+                  }
+                : r
+            )
+          );
         }
       }
     } catch (err) {
@@ -160,12 +282,13 @@ export default function App() {
     } finally {
       setIsRefiningReqId(null);
     }
+    return addedCount;
   };
 
   // Auto generate missing test cases for a specific requirement
-  const handleAutoGenerateMissingForReq = (req: RequirementItem) => {
+  const handleAutoGenerateMissingForReq = async (req: RequirementItem): Promise<number> => {
     const prompt = `Generate missing test scenarios for requirement ${req.id} (${req.title}). Focus on missing edge cases, negative flows, boundary values, and security checks.`;
-    handleRefineRequirement(req.id, prompt);
+    return await handleRefineRequirement(req.id, prompt);
   };
 
   // CRUD Operations on Test Cases
@@ -182,22 +305,38 @@ export default function App() {
   };
 
   // Direct Excel Export
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (testCases.length === 0) return;
-    exportTestCasesToExcel(
+    await exportTestCasesToExcel(
       testCases,
       activeTemplate,
       requirements,
-      `Test_Cases_${activeTemplate.templateName.replace(/[^a-zA-Z0-9]/g, '_')}.xlsx`
+      `Gelistirme_Test_Durum_Dokumani.xlsx`
     );
   };
 
   const handleReset = () => {
-    if (confirm('Tüm üretilmiş test case verilerini temizlemek istediğinize emin misiniz?')) {
+    if (confirm('Tüm üretilmiş test case ve test koşum verilerini temizlemek istediğinize emin misiniz?')) {
       setTestCases([]);
       setRequirements([]);
       setGenerationStats(null);
       setRecommendations([]);
+      const defaultRuns: TestRun[] = [
+        {
+          id: 'RUN-1',
+          name: 'Sprint 24 Regresyon Test Koşumu',
+          environment: 'Staging Env-1',
+          createdAt: new Date().toISOString().slice(0, 10),
+          executions: {},
+        },
+      ];
+      setTestRuns(defaultRuns);
+      setActiveRunId('RUN-1');
+      localStorage.removeItem('tm_requirements');
+      localStorage.removeItem('tm_test_cases');
+      localStorage.removeItem('tm_generation_stats');
+      localStorage.removeItem('tm_test_runs');
+      localStorage.removeItem('tm_active_run_id');
     }
   };
 
@@ -317,15 +456,6 @@ export default function App() {
                   <span>QA Metrikleri</span>
                 </button>
               </div>
-
-              {/* Excel Direct Download CTA */}
-              <button
-                onClick={handleExportExcel}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-lg shadow-emerald-950 flex items-center gap-2 transition-all transform active:scale-95"
-              >
-                <Download className="w-4 h-4" />
-                <span>Excel Olarak Dışa Aktar (.xlsx)</span>
-              </button>
             </div>
 
             {/* Active View Content */}
@@ -340,6 +470,7 @@ export default function App() {
                 onRefineRequirement={handleRefineRequirement}
                 isRefiningReqId={isRefiningReqId}
                 onExportExcel={handleExportExcel}
+                onOpenAddModal={handleOpenAddModal}
               />
             )}
 
@@ -349,6 +480,10 @@ export default function App() {
                 requirements={requirements}
                 jiraConfig={jiraConfig}
                 onOpenJiraModal={() => setIsJiraModalOpen(true)}
+                testRuns={testRuns}
+                setTestRuns={setTestRuns}
+                activeRunId={activeRunId}
+                setActiveRunId={setActiveRunId}
               />
             )}
 
@@ -370,11 +505,15 @@ export default function App() {
                 recommendations={recommendations}
                 onAutoGenerateMissing={handleAutoGenerateMissingForReq}
                 isRefining={Boolean(isRefiningReqId)}
+                isRefiningReqId={isRefiningReqId}
               />
             )}
 
             {activeTab === 'rtm' && (
-              <TraceabilityMatrixView requirements={requirements} testCases={testCases} />
+              <TraceabilityMatrixView
+                requirements={requirements}
+                testCases={testCases}
+              />
             )}
 
             {activeTab === 'stats' && generationStats && (
@@ -403,6 +542,16 @@ export default function App() {
         onClose={() => setIsJiraModalOpen(false)}
         jiraConfig={jiraConfig}
         onSaveConfig={handleSaveJiraConfig}
+      />
+
+      {/* Manual Test Case Add Modal */}
+      <AddTestCaseModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        requirements={requirements}
+        testCases={testCases}
+        defaultReqId={selectedReqForAddModal}
+        onAddTestCase={handleAddTestCase}
       />
     </div>
   );

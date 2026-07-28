@@ -41,6 +41,10 @@ interface TestExecutionViewProps {
   requirements: RequirementItem[];
   jiraConfig?: JiraConfig;
   onOpenJiraModal?: () => void;
+  testRuns?: TestRun[];
+  setTestRuns?: React.Dispatch<React.SetStateAction<TestRun[]>>;
+  activeRunId?: string;
+  setActiveRunId?: (runId: string) => void;
 }
 
 export const TestExecutionView: React.FC<TestExecutionViewProps> = ({
@@ -48,9 +52,12 @@ export const TestExecutionView: React.FC<TestExecutionViewProps> = ({
   requirements,
   jiraConfig,
   onOpenJiraModal,
+  testRuns: propsTestRuns,
+  setTestRuns: propsSetTestRuns,
+  activeRunId: propsActiveRunId,
+  setActiveRunId: propsSetActiveRunId,
 }) => {
-  // Mock initial test run
-  const [testRuns, setTestRuns] = useState<TestRun[]>([
+  const [localTestRuns, setLocalTestRuns] = useState<TestRun[]>([
     {
       id: 'RUN-1',
       name: 'Sprint 24 Regresyon Test Koşumu',
@@ -60,7 +67,12 @@ export const TestExecutionView: React.FC<TestExecutionViewProps> = ({
     },
   ]);
 
-  const [activeRunId, setActiveRunId] = useState<string>('RUN-1');
+  const [localActiveRunId, setLocalActiveRunId] = useState<string>('RUN-1');
+
+  const testRuns = propsTestRuns || localTestRuns;
+  const setTestRuns = propsSetTestRuns || setLocalTestRuns;
+  const activeRunId = propsActiveRunId || localActiveRunId;
+  const setActiveRunId = propsSetActiveRunId || setLocalActiveRunId;
   const [isCreatingRun, setIsCreatingRun] = useState<boolean>(false);
   const [newRunName, setNewRunName] = useState<string>('');
   const [newRunEnv, setNewRunEnv] = useState<string>('Staging');

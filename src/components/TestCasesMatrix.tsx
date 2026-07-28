@@ -21,6 +21,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { formatStepsText, getValueForMappedField } from '../utils/excelHelper';
+import { generateNextTestCaseId } from '../utils/idGenerator';
+import { EditTestCaseModal } from './EditTestCaseModal';
 
 interface TestCasesMatrixProps {
   testCases: TestCase[];
@@ -32,6 +34,7 @@ interface TestCasesMatrixProps {
   onRefineRequirement: (reqId: string, promptInstruction: string) => void;
   isRefiningReqId?: string | null;
   onExportExcel: () => void;
+  onOpenAddModal?: (reqId?: string) => void;
 }
 
 export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
@@ -44,12 +47,16 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
   onRefineRequirement,
   isRefiningReqId,
   onExportExcel,
+  onOpenAddModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedReqFilter, setSelectedReqFilter] = useState<string>('all');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('all');
   const [selectedPriorityFilter, setSelectedPriorityFilter] = useState<string>('all');
   const [groupBy, setGroupBy] = useState<'req' | 'module' | 'none'>('req');
+
+  // Modal Editing State
+  const [editingModalTc, setEditingModalTc] = useState<TestCase | null>(null);
 
   // Inline Editing State
   const [editingTcId, setEditingTcId] = useState<string | null>(null);
@@ -60,8 +67,7 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
   const [refinePrompt, setRefinePrompt] = useState('');
 
   const handleStartEdit = (tc: TestCase) => {
-    setEditingTcId(tc.id);
-    setEditForm({ ...tc, steps: [...tc.steps] });
+    setEditingModalTc(tc);
   };
 
   const handleSaveEdit = () => {
@@ -81,7 +87,7 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
     const targetReq = reqIdToUse || requirements[0]?.id || 'REQ-01';
     const reqObj = requirements.find((r) => r.id === targetReq);
     const newTc: TestCase = {
-      id: `TC-${targetReq.replace(/[^a-zA-Z0-9]/g, '')}-${Date.now().toString().slice(-4)}`,
+      id: generateNextTestCaseId(targetReq, testCases),
       reqId: targetReq,
       module: reqObj?.category || 'Genel Modül',
       title: 'Yeni Test Senaryosu',
@@ -146,10 +152,15 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
   };
 
   const getTypeBadgeClass = (t: string) => {
-    if (t === 'Pozitif') return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
-    if (t === 'Negatif') return 'bg-rose-500/15 text-rose-300 border-rose-500/30';
-    if (t.includes('Sınır') || t.includes('Boundary')) return 'bg-purple-500/15 text-purple-300 border-purple-500/30';
-    if (t === 'Güvenlik') return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+    if (!t) return 'bg-slate-700 text-slate-300 border-slate-600';
+    if (t.includes('Pozitif') || t.includes('Positive')) return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+    if (t.includes('Negatif') || t.includes('Negative')) return 'bg-rose-500/15 text-rose-300 border-rose-500/30';
+    if (t.includes('Sınır') || t.includes('BVA') || t.includes('Boundary') || t.includes('Eşdeğer')) return 'bg-purple-500/15 text-purple-300 border-purple-500/30';
+    if (t.includes('Güvenlik') || t.includes('Security')) return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+    if (t.includes('Performans') || t.includes('Yük') || t.includes('Performance')) return 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30';
+    if (t.includes('Kullanılabilirlik') || t.includes('Erişilebilirlik') || t.includes('UX')) return 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30';
+    if (t.includes('Regresyon') || t.includes('Yeniden')) return 'bg-orange-500/15 text-orange-300 border-orange-500/30';
+    if (t.includes('Kabul') || t.includes('UAT') || t.includes('SIT')) return 'bg-teal-500/15 text-teal-300 border-teal-500/30';
     return 'bg-blue-500/15 text-blue-300 border-blue-500/30';
   };
 
@@ -198,19 +209,11 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
             </div>
 
             <button
-              onClick={() => handleAddNewRow()}
-              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-indigo-300 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+              onClick={() => onOpenAddModal ? onOpenAddModal() : handleAddNewRow()}
+              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Yeni Test Ekle</span>
-            </button>
-
-            <button
-              onClick={onExportExcel}
-              className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-md transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Excel İndir</span>
+              <span>Manuel Test Case Ekle</span>
             </button>
           </div>
         </div>
@@ -249,12 +252,31 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
             onChange={(e) => setSelectedTypeFilter(e.target.value)}
             className="bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500"
           >
-            <option value="all">Tüm Test Tipleri</option>
-            <option value="Pozitif">Pozitif (Happy Path)</option>
-            <option value="Negatif">Negatif (Hata Akışı)</option>
-            <option value="Sınır Değer (Boundary)">Sınır Değer (Boundary)</option>
-            <option value="Güvenlik">Güvenlik & Yetki</option>
-            <option value="Performans">Performans</option>
+            <option value="all">Tüm Test Tipleri (ISTQB)</option>
+            <optgroup label="Fonksiyonel Testler">
+              <option value="Pozitif">Pozitif (Fonksiyonel Doğruluk)</option>
+              <option value="Negatif">Negatif (Hata Yönetimi)</option>
+              <option value="Sınır">Sınır Değer Analizi (BVA)</option>
+              <option value="Eşdeğer">Eşdeğer Sınıflandırma (EP)</option>
+              <option value="Durum">Durum Geçiş Testi (State Transition)</option>
+              <option value="Karar">Karar Tablosu Testi (Decision Table)</option>
+              <option value="Kullanım">Kullanım Senaryosu Testi (Use Case)</option>
+            </optgroup>
+            <optgroup label="Fonksiyonel Olmayan Testler">
+              <option value="Performans">Performans Testi (Performance)</option>
+              <option value="Yük">Yük ve Stres Testi (Load & Stress)</option>
+              <option value="Güvenlik">Güvenlik ve Yetki Testi (Security)</option>
+              <option value="Kullanılabilirlik">Kullanılabilirlik Testi (Usability / UX)</option>
+              <option value="Uyumluluk">Uyumluluk ve Çapraz Platform (Compatibility)</option>
+              <option value="Erişilebilirlik">Erişilebilirlik Testi (Accessibility / WCAG)</option>
+              <option value="Güvenilirlik">Güvenilirlik ve Kurtarılabilirlik (Reliability)</option>
+            </optgroup>
+            <optgroup label="Değişiklikle İlgili & Kabul">
+              <option value="Regresyon">Regresyon Testi (Regression)</option>
+              <option value="Yeniden">Yeniden Test / Onaylama (Re-Testing)</option>
+              <option value="Kabul">Kullanıcı Kabul Testi (UAT)</option>
+              <option value="Entegrasyon">Sistem Entegrasyon Testi (SIT)</option>
+            </optgroup>
           </select>
 
           {/* Priority Filter */}
@@ -295,18 +317,20 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                     <span className="text-[11px] text-slate-400">({group.items.length} Test)</span>
                   </div>
 
-                  {/* Refine / AI Add Test cases for this requirement */}
-                  {reqObj && (
-                    <button
-                      onClick={() =>
-                        setActiveRefineReqId(activeRefineReqId === reqObj.id ? null : reqObj.id)
-                      }
-                      className="text-xs font-medium text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-colors"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Bu Gereksinime AI Test Ekle</span>
-                    </button>
-                  )}
+                  {/* Action buttons for this requirement group */}
+                  <div className="flex items-center gap-2">
+                    {reqObj && (
+                      <button
+                        onClick={() =>
+                          setActiveRefineReqId(activeRefineReqId === reqObj.id ? null : reqObj.id)
+                        }
+                        className="text-xs font-medium text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-colors"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Bu Gereksinime AI Test Ekle</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* AI Refine Drawer if active */}
@@ -562,6 +586,15 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
           })
         )}
       </div>
+
+      {/* Spacious Edit Test Case Modal */}
+      <EditTestCaseModal
+        isOpen={Boolean(editingModalTc)}
+        onClose={() => setEditingModalTc(null)}
+        testCase={editingModalTc}
+        requirements={requirements}
+        onSave={onUpdateTestCase}
+      />
     </div>
   );
 };

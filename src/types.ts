@@ -14,6 +14,35 @@ export type MappedFieldType =
   | 'severity'
   | 'custom';
 
+export const FUNCTIONAL_TEST_TYPES = [
+  'Pozitif (Fonksiyonel Doğruluk)',
+  'Negatif (Hata Yönetimi)',
+  'Sınır Değer Analizi (BVA)',
+  'Eşdeğer Sınıflandırma (EP)',
+  'Durum Geçiş Testi (State Transition)',
+  'Karar Tablosu Testi (Decision Table)',
+  'Kullanım Senaryosu Testi (Use Case)',
+] as const;
+
+export const NON_FUNCTIONAL_TEST_TYPES = [
+  'Performans Testi (Performance)',
+  'Yük ve Stres Testi (Load & Stress)',
+  'Güvenlik ve Yetki Testi (Security)',
+  'Kullanılabilirlik Testi (Usability / UX)',
+  'Uyumluluk ve Çapraz Platform (Compatibility)',
+  'Erişilebilirlik Testi (Accessibility / WCAG)',
+  'Güvenilirlik ve Kurtarılabilirlik (Reliability)',
+  'Regresyon Testi (Regression)',
+  'Kullanıcı Kabul Testi (UAT)',
+] as const;
+
+export const ISTQB_TEST_TYPES = [
+  ...FUNCTIONAL_TEST_TYPES,
+  ...NON_FUNCTIONAL_TEST_TYPES,
+] as const;
+
+export type ISTQBTestType = (typeof ISTQB_TEST_TYPES)[number] | string;
+
 export interface TemplateColumn {
   id: string;
   name: string; // The exact column header text in the Excel sheet
@@ -42,7 +71,7 @@ export interface TestCase {
   testData: string;
   expectedResult: string;
   priority: 'Yüksek' | 'Orta' | 'Düşük' | 'High' | 'Medium' | 'Low';
-  testType: 'Pozitif' | 'Negatif' | 'Sınır Değer (Boundary)' | 'Güvenlik' | 'Performans' | 'Kullanılabilirlik';
+  testType: ISTQBTestType;
   executionType: 'Manuel' | 'Otomasyon';
   severity: 'Kritik' | 'Yüksek' | 'Normal' | 'Düşük';
   customFields?: Record<string, string>;
@@ -61,9 +90,16 @@ export interface RequirementItem {
 export interface GenerationConfig {
   positiveCountPerReq: number;
   negativeCountPerReq: number;
+  selectedFunctionalTypes?: string[];
+  selectedNonFunctionalTypes?: string[];
   includeBoundary: boolean;
   includeSecurity: boolean;
   includePerformance: boolean;
+  includeUsability?: boolean;
+  includeCompatibility?: boolean;
+  includeRegression?: boolean;
+  includeUAT?: boolean;
+  selectedIstqbTypes?: string[];
   language: 'tr' | 'en';
   customInstructions?: string;
 }

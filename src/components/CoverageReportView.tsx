@@ -17,6 +17,9 @@ import {
   Zap,
   ArrowRight,
   Info,
+  Loader2,
+  Check,
+  X,
 } from 'lucide-react';
 
 interface CoverageReportViewProps {
@@ -24,8 +27,9 @@ interface CoverageReportViewProps {
   testCases: TestCase[];
   stats: GenerationStats;
   recommendations?: string[];
-  onAutoGenerateMissing: (req: RequirementItem) => void;
+  onAutoGenerateMissing: (req: RequirementItem) => Promise<number | void> | void;
   isRefining: boolean;
+  isRefiningReqId?: string | null;
 }
 
 export const CoverageReportView: React.FC<CoverageReportViewProps> = ({
@@ -35,9 +39,24 @@ export const CoverageReportView: React.FC<CoverageReportViewProps> = ({
   recommendations,
   onAutoGenerateMissing,
   isRefining,
+  isRefiningReqId,
 }) => {
   const [filter, setFilter] = useState<'all' | 'full' | 'partial' | 'uncovered'>('all');
   const [selectedReqId, setSelectedReqId] = useState<string | null>(null);
+  const [completedReqIds, setCompletedReqIds] = useState<Set<string>>(new Set());
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const handleCompleteClick = async (req: RequirementItem) => {
+    try {
+      const result = await onAutoGenerateMissing(req);
+      setCompletedReqIds((prev) => new Set([...prev, req.id]));
+      const countText = typeof result === 'number' && result > 0 ? ` (${result} yeni test senaryosu eklendi)` : '';
+      setToastMsg(`✓ ${req.id} gereksinimi için eksik testler başarıyla tamamlandı!${countText}`);
+      setTimeout(() => setToastMsg(null), 6000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Group test cases by reqId
   const getTCsForReq = (reqId: string) => {
@@ -141,6 +160,29 @@ export const CoverageReportView: React.FC<CoverageReportViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Toast Notification Banner when Missing Tests Completed */}
+      {toastMsg && (
+        <div className="bg-emerald-950/80 border border-emerald-500/40 rounded-2xl p-4 text-emerald-200 text-xs flex items-center justify-between gap-3 shadow-xl animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-emerald-500/20 rounded-xl text-emerald-400">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-bold text-emerald-300 text-sm">{toastMsg}</p>
+              <p className="text-[11px] text-emerald-400/80">
+                Yeni üretilen test senaryoları Test Case Matrisine ve RTM'ye otomatik olarak eklenmiştir.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setToastMsg(null)}
+            className="p-1 hover:bg-emerald-800/50 rounded-lg text-emerald-300 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Recommendations & Risk Analysis Box */}
       {recommendations && recommendations.length > 0 && (
@@ -292,29 +334,42 @@ export const CoverageReportView: React.FC<CoverageReportViewProps> = ({
                       <p className="text-xs text-slate-300 line-clamp-2">{req.description}</p>
                     </div>
 
-                    {/* Right: Actions & TC Counts */}
-                    <div className="flex items-center gap-3 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-white/10 justify-between md:justify-end">
-                      <div className="text-right text-xs space-y-0.5">
-                        <div className="text-slate-300 font-semibold">
-                          <strong className="text-blue-400">{matchedTCs.length}</strong> Test Senaryosu
+                      {/* Right: Actions & TC Counts */}
+                      <div className="flex items-center gap-3 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-white/10 justify-between md:justify-end">
+                        <div className="text-right text-xs space-y-0.5">
+                          <div className="text-slate-300 font-semibold">
+                            <strong className="text-blue-400">{matchedTCs.length}</strong> Test Senaryosu
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {positiveTCs.length} Pozitif • {negativeTCs.length} Negatif • {edgeTCs.length} Sınır/Güvenlik
+                          </div>
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          {positiveTCs.length} Pozitif • {negativeTCs.length} Negatif • {edgeTCs.length} Sınır/Güvenlik
-                        </div>
-                      </div>
 
-                      {(status === 'Partial' || status === 'Uncovered') && (
-                        <button
-                          onClick={() => onAutoGenerateMissing(req)}
-                          disabled={isRefining}
-                          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 shadow-lg shadow-blue-600/20"
-                          title="Yapay zekanın bu gereksinimin eksik kalan negatif/sınır senaryolarını tamamlamasını sağlayın"
-                        >
-                          <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                          <span>Eksik Testleri Tamamla</span>
-                        </button>
-                      )}
-                    </div>
+                        {isRefiningReqId === req.id ? (
+                          <button
+                            disabled
+                            className="bg-amber-500/20 border border-amber-500/40 text-amber-200 text-xs font-semibold px-3.5 py-2 rounded-xl flex items-center gap-2 cursor-wait"
+                          >
+                            <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                            <span>Eksik Testler Tamamlanıyor...</span>
+                          </button>
+                        ) : completedReqIds.has(req.id) ? (
+                          <div className="bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-semibold px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-sm">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <span>Eksik Testler Tamamlandı</span>
+                          </div>
+                        ) : (status === 'Partial' || status === 'Uncovered') ? (
+                          <button
+                            onClick={() => handleCompleteClick(req)}
+                            disabled={isRefining}
+                            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 shadow-lg shadow-blue-600/20"
+                            title="Yapay zekanın bu gereksinimin eksik kalan negatif/sınır senaryolarını tamamlamasını sağlayın"
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                            <span>Eksik Testleri Tamamla</span>
+                          </button>
+                        ) : null}
+                      </div>
                   </div>
 
                   {/* Missing Gap Details if Partial/Uncovered */}

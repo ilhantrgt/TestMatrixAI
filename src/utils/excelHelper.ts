@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { ExcelTemplateConfig, MappedFieldType, RequirementItem, TemplateColumn, TestCase } from '../types';
 
 /**
@@ -221,113 +222,412 @@ export function getValueForMappedField(
   }
 }
 
-/**
- * Exports test cases and RTM to Excel (.xlsx) file matching exact template layout
- */
-export function exportTestCasesToExcel(
-  testCases: TestCase[],
-  template: ExcelTemplateConfig,
-  requirements: RequirementItem[],
-  filename: string = 'Test_Senaryolari_Dokumani.xlsx'
+// Styling helper for ExcelJS cells
+function formatCell(
+  cell: ExcelJS.Cell,
+  opts: {
+    fontBold?: boolean;
+    fontColor?: string; // e.g. "000000" or "FFFFFF"
+    fontSize?: number;
+    bgColor?: string; // e.g. "FFC000", "D9D9D9", "385723"
+    align?: 'left' | 'center' | 'right';
+    valign?: 'top' | 'middle' | 'bottom';
+    wrapText?: boolean;
+    border?: boolean;
+  }
 ) {
-  const wb = XLSX.utils.book_new();
+  cell.font = {
+    name: 'Calibri',
+    size: opts.fontSize || 10,
+    bold: !!opts.fontBold,
+    color: opts.fontColor ? { argb: 'FF' + opts.fontColor.replace('#', '') } : { argb: 'FF000000' },
+  };
 
-  // 1. Build Test Cases Sheet Data
-  const headers = template.columns.map((c) => c.name);
-  const rowsData: string[][] = [headers];
+  if (opts.bgColor) {
+    const cleanHex = opts.bgColor.replace('#', '');
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF' + cleanHex },
+    };
+  }
 
-  testCases.forEach((tc) => {
-    const row = template.columns.map((col) => getValueForMappedField(tc, col));
-    rowsData.push(row);
+  cell.alignment = {
+    horizontal: opts.align || 'left',
+    vertical: opts.valign || 'middle',
+    wrapText: opts.wrapText !== false,
+  };
+
+  if (opts.border !== false) {
+    const thinBorder: ExcelJS.Border = { style: 'thin', color: { argb: 'FF808080' } };
+    cell.border = {
+      top: thinBorder,
+      left: thinBorder,
+      bottom: thinBorder,
+      right: thinBorder,
+    };
+  }
+}
+
+/**
+ * Exports test cases and RTM to Excel (.xlsx) file matching exact corporate template layout (3 Sheets: Kapak, Genel, Test Durumları)
+ * Fully styled with colored bold headers, borders, custom column widths, and gridlines enabled.
+ */
+export async function exportTestCasesToExcel(
+  testCases: TestCase[],
+  _template: ExcelTemplateConfig,
+  requirements: RequirementItem[],
+  filename: string = 'Gelistirme_Test_Durum_Dokumani.xlsx'
+) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'AI Test Studio';
+  wb.created = new Date();
+
+  const todayStr = new Date().toLocaleDateString('tr-TR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
   });
 
-  const tcSheet = XLSX.utils.aoa_to_sheet(rowsData);
+  const mainModuleOrReq = requirements[0]?.title || testCases[0]?.module || 'Yazılım Geliştirme Test Senaryoları';
+  const mainDemandNo = requirements[0]?.id || 'REQ-2026-01';
 
-  // Set column widths
-  tcSheet['!cols'] = template.columns.map((col) => ({
-    wch: col.width || Math.max(col.name.length + 5, 20),
-  }));
-
-  XLSX.utils.book_append_sheet(wb, tcSheet, template.sheetName || 'Test Scenarios');
-
-  // 2. Build Requirements Traceability Matrix (RTM) Sheet
-  const rtmHeaders = [
-    'Gereksinim ID (Req ID)',
-    'Gereksinim Başlığı',
-    'Bağlı Test Case Sayısı',
-    'Pozitif Senaryolar',
-    'Negatif Senaryolar',
-    'Sınır/Güvenlik/Diğer',
-    'İzlenebilirlik / Kapsama Durumu',
-    'Eşleşen Test Case ID\'leri',
+  // ==========================================
+  // SHEET 1: Kapak
+  // ==========================================
+  const kapakSheet = wb.addWorksheet('Kapak', { views: [{ showGridLines: true }] });
+  
+  kapakSheet.columns = [
+    { width: 18 }, // A
+    { width: 28 }, // B
+    { width: 16 }, // C
+    { width: 22 }, // D
+    { width: 20 }, // E
+    { width: 18 }, // F
+    { width: 18 }, // G
+    { width: 18 }, // H
+    { width: 14 }, // I
+    { width: 14 }, // J
   ];
 
-  const rtmRows: string[][] = [rtmHeaders];
+  // Row 1: Logo & Title
+  kapakSheet.mergeCells('A1:C3');
+  const a1 = kapakSheet.getCell('A1');
+  a1.value = 'TURK TELEKOM';
+  formatCell(a1, { fontBold: true, fontSize: 13, fontColor: '002060', bgColor: 'F2F2F2', align: 'center', valign: 'middle' });
 
-  requirements.forEach((req) => {
-    const matchedTCs = testCases.filter(
-      (tc) => tc.reqId.toLowerCase().trim() === req.id.toLowerCase().trim()
+  kapakSheet.mergeCells('D1:J1');
+  const d1 = kapakSheet.getCell('D1');
+  d1.value = 'TEKNOLOJİ BAŞKANLIĞI GELİŞTİRME TEST DURUM DÖKÜMANI';
+  formatCell(d1, { fontBold: true, fontSize: 11, fontColor: '000000', bgColor: 'D9D9D9', align: 'center', valign: 'middle' });
+
+  // Row 2: Doc Info Headers
+  kapakSheet.mergeCells('D2:E2');
+  kapakSheet.getCell('D2').value = 'Doküman No';
+  formatCell(kapakSheet.getCell('D2'), { fontBold: true, fontSize: 9, bgColor: 'D9D9D9', align: 'center' });
+
+  kapakSheet.mergeCells('F2:G2');
+  kapakSheet.getCell('F2').value = 'Yürürlük Tarihi';
+  formatCell(kapakSheet.getCell('F2'), { fontBold: true, fontSize: 9, bgColor: 'D9D9D9', align: 'center' });
+
+  kapakSheet.getCell('H2').value = 'Sürüm Tarihi';
+  formatCell(kapakSheet.getCell('H2'), { fontBold: true, fontSize: 9, bgColor: 'D9D9D9', align: 'center' });
+
+  kapakSheet.getCell('I2').value = 'Sürüm No';
+  formatCell(kapakSheet.getCell('I2'), { fontBold: true, fontSize: 9, bgColor: 'D9D9D9', align: 'center' });
+
+  kapakSheet.getCell('J2').value = 'Sayfa No';
+  formatCell(kapakSheet.getCell('J2'), { fontBold: true, fontSize: 9, bgColor: 'D9D9D9', align: 'center' });
+
+  // Row 3: Doc Info Values
+  kapakSheet.mergeCells('D3:E3');
+  kapakSheet.getCell('D3').value = 'TT-TD-2026-001';
+  formatCell(kapakSheet.getCell('D3'), { align: 'center' });
+
+  kapakSheet.mergeCells('F3:G3');
+  kapakSheet.getCell('F3').value = todayStr;
+  formatCell(kapakSheet.getCell('F3'), { align: 'center' });
+
+  kapakSheet.getCell('H3').value = todayStr;
+  formatCell(kapakSheet.getCell('H3'), { align: 'center' });
+
+  kapakSheet.getCell('I3').value = '1.0';
+  formatCell(kapakSheet.getCell('I3'), { align: 'center' });
+
+  kapakSheet.getCell('J3').value = '1 / 1';
+  formatCell(kapakSheet.getCell('J3'), { align: 'center' });
+
+  // Row 6: Demand Info
+  kapakSheet.mergeCells('A6:C6');
+  kapakSheet.getCell('A6').value = 'TALEP NO / TALEP ADI';
+  formatCell(kapakSheet.getCell('A6'), { fontBold: true, fontSize: 10, bgColor: 'D9D9D9', align: 'center' });
+
+  kapakSheet.mergeCells('D6:J6');
+  kapakSheet.getCell('D6').value = `${mainDemandNo} / ${mainModuleOrReq}`;
+  formatCell(kapakSheet.getCell('D6'), { fontBold: true, fontSize: 10, align: 'left' });
+
+  // Row 10: Hazırlayan Table Header
+  const h10 = ['Hazırlayan', 'Görevi', 'Tarih', 'İmza'];
+  h10.forEach((text, i) => {
+    const cell = kapakSheet.getCell(10, i + 1);
+    cell.value = text;
+    formatCell(cell, { fontBold: true, bgColor: 'D9D9D9', align: 'center' });
+  });
+
+  // Row 11: Hazırlayan Data
+  const d11 = ['AI Test Generator', 'Senior Kıdemli Test Uzmanı', todayStr, 'Dijital İmzalı'];
+  d11.forEach((text, i) => {
+    const cell = kapakSheet.getCell(11, i + 1);
+    cell.value = text;
+    formatCell(cell, { align: i === 0 || i === 1 ? 'left' : 'center' });
+  });
+
+  // Row 15: Onaylayan Table Header
+  const h15 = ['Onaylayan', 'Görevi', 'Tarih', 'İmza'];
+  h15.forEach((text, i) => {
+    const cell = kapakSheet.getCell(15, i + 1);
+    cell.value = text;
+    formatCell(cell, { fontBold: true, bgColor: 'D9D9D9', align: 'center' });
+  });
+
+  // Row 16: Onaylayan Data
+  const d16 = ['Test Yönetim Müdürü', 'Test Yöneticisi Lead', todayStr, '-'];
+  d16.forEach((text, i) => {
+    const cell = kapakSheet.getCell(16, i + 1);
+    cell.value = text;
+    formatCell(cell, { align: i === 0 || i === 1 ? 'left' : 'center' });
+  });
+
+  // Row 21: Değişiklik Başlık
+  kapakSheet.getCell('A21').value = 'DEĞİŞİKLİK KAYITLARI';
+  formatCell(kapakSheet.getCell('A21'), { fontBold: true, fontSize: 10, border: false });
+
+  // Row 22: Değişiklik Table Header
+  const h22 = ['Tarih', 'Hazırlayan', 'Sürüm', 'Değişiklik Açıklaması'];
+  h22.forEach((text, i) => {
+    const cell = kapakSheet.getCell(22, i + 1);
+    cell.value = text;
+    formatCell(cell, { fontBold: true, bgColor: 'D9D9D9', align: 'center' });
+  });
+
+  // Row 23: Değişiklik Data
+  const d23 = [todayStr, 'AI Test Engine', '1.0', 'İlk Test Durumu Dokümanı Oluşturuldu'];
+  d23.forEach((text, i) => {
+    const cell = kapakSheet.getCell(23, i + 1);
+    cell.value = text;
+    formatCell(cell, { align: i === 3 || i === 1 ? 'left' : 'center' });
+  });
+
+  // Apply borders to merged range cells on Kapak
+  ['A1', 'B1', 'C1', 'A2', 'B2', 'C2', 'A3', 'B3', 'C3'].forEach((addr) => {
+    formatCell(kapakSheet.getCell(addr), { fontBold: true, fontSize: 13, fontColor: '002060', bgColor: 'F2F2F2', align: 'center' });
+  });
+  ['D1', 'E1', 'F1', 'G1', 'H1', 'I1', 'J1'].forEach((addr) => {
+    formatCell(kapakSheet.getCell(addr), { fontBold: true, fontSize: 11, bgColor: 'D9D9D9', align: 'center' });
+  });
+  ['D2', 'E2'].forEach((addr) => formatCell(kapakSheet.getCell(addr), { fontBold: true, fontSize: 9, bgColor: 'D9D9D9', align: 'center' }));
+  ['F2', 'G2'].forEach((addr) => formatCell(kapakSheet.getCell(addr), { fontBold: true, fontSize: 9, bgColor: 'D9D9D9', align: 'center' }));
+  ['D3', 'E3'].forEach((addr) => formatCell(kapakSheet.getCell(addr), { align: 'center' }));
+  ['F3', 'G3'].forEach((addr) => formatCell(kapakSheet.getCell(addr), { align: 'center' }));
+  ['A6', 'B6', 'C6'].forEach((addr) => formatCell(kapakSheet.getCell(addr), { fontBold: true, bgColor: 'D9D9D9', align: 'center' }));
+  ['D6', 'E6', 'F6', 'G6', 'H6', 'I6', 'J6'].forEach((addr) => formatCell(kapakSheet.getCell(addr), { fontBold: true, align: 'left' }));
+
+  // ==========================================
+  // SHEET 2: Genel
+  // ==========================================
+  const genelSheet = wb.addWorksheet('Genel', { views: [{ showGridLines: true }] });
+
+  genelSheet.columns = [
+    { width: 20 }, // FR/NFR ID
+    { width: 24 }, // Kullanım Durumu ID
+    { width: 38 }, // Kullanım Durumu Adı
+    { width: 20 }, // Test Durumu ID
+    { width: 48 }, // Test Durumu Adı
+    { width: 38 }, // Ön Koşul
+    { width: 28 }, // Test Durum Bağımlılığı
+  ];
+
+  // Header Row 1: Matching image 2 colors exactly
+  const genelHeaders = [
+    { text: 'FR/NFR ID', bgColor: 'FFE699' },            // Gold/Orange
+    { text: 'Kullanım Durumu ID', bgColor: 'FFF2CC' },    // Light Yellow
+    { text: 'Kullanım Durumu Adı', bgColor: 'FFF2CC' },   // Light Yellow
+    { text: 'Test Durumu ID', bgColor: 'D9E1F2' },        // Light Blue/Lavender
+    { text: 'Test Durumu Adı', bgColor: 'D9E1F2' },       // Light Blue/Lavender
+    { text: 'Ön Koşul', bgColor: 'D9E1F2' },              // Light Blue/Lavender
+    { text: 'Test Durum Bağımlılığı', bgColor: 'D9E1F2' },// Light Blue/Lavender
+  ];
+
+  const gHeaderRow = genelSheet.getRow(1);
+  gHeaderRow.height = 26;
+
+  genelHeaders.forEach((col, idx) => {
+    const cell = gHeaderRow.getCell(idx + 1);
+    cell.value = col.text;
+    formatCell(cell, {
+      fontBold: true,
+      fontColor: '000000',
+      bgColor: col.bgColor,
+      align: 'center',
+      valign: 'middle',
+    });
+  });
+
+  // Map to store Test Case IDs formatted as TD.01, TD.02
+  const tcIdToTdNoMap: Record<string, string> = {};
+
+  testCases.forEach((tc, idx) => {
+    let tdNo = tc.id;
+    if (!tdNo || !/^TD\.\d+/i.test(tdNo)) {
+      tdNo = `TD.${String(idx + 1).padStart(2, '0')}`;
+    }
+    tcIdToTdNoMap[tc.id] = tdNo;
+
+    const matchedReq = requirements.find(
+      (r) => r.id.toLowerCase().trim() === tc.reqId.toLowerCase().trim()
     );
-    const positiveCount = matchedTCs.filter((tc) => tc.testType === 'Pozitif').length;
-    const negativeCount = matchedTCs.filter((tc) => tc.testType === 'Negatif').length;
-    const otherCount = matchedTCs.length - positiveCount - negativeCount;
+    const reqIndex = requirements.findIndex(
+      (r) => r.id.toLowerCase().trim() === tc.reqId.toLowerCase().trim()
+    );
 
-    let status = 'Kapsanmadı';
-    if (matchedTCs.length >= 3 && positiveCount >= 1 && negativeCount >= 1) {
-      status = 'Tam Kapsandı (Tam Test)';
-    } else if (matchedTCs.length > 0) {
-      status = 'Kısmi Kapsandı';
+    const frId = tc.reqId || (matchedReq ? matchedReq.id : 'FR-01');
+    const ucId = matchedReq ? `UC.${String(Math.max(reqIndex, 0) + 1).padStart(2, '0')}` : 'UC.01';
+    const ucName = matchedReq ? matchedReq.title : (tc.module || 'Genel Senaryo');
+    const onKosul = tc.preconditions || 'OK';
+    const bagimlilik = tc.customFields?.dependency || '-';
+
+    const row = genelSheet.addRow([
+      frId,
+      ucId,
+      ucName,
+      tdNo,
+      tc.title,
+      onKosul,
+      bagimlilik,
+    ]);
+
+    row.height = 22;
+
+    formatCell(row.getCell(1), { align: 'center' });
+    formatCell(row.getCell(2), { align: 'center' });
+    formatCell(row.getCell(3), { align: 'left' });
+    formatCell(row.getCell(4), { align: 'center', fontBold: true });
+    formatCell(row.getCell(5), { align: 'left' });
+    formatCell(row.getCell(6), { align: 'left' });
+    formatCell(row.getCell(7), { align: 'center' });
+  });
+
+  // ==========================================
+  // SHEET 3: Test Durumları
+  // ==========================================
+  const testDurumlariSheet = wb.addWorksheet('Test Durumları', { views: [{ showGridLines: true }] });
+
+  testDurumlariSheet.columns = [
+    { width: 18 }, // Test Durum No
+    { width: 20 }, // Test Adım No
+    { width: 22 }, // Sistem
+    { width: 30 }, // Test Adım Ön Koşulu (Varsa)
+    { width: 30 }, // Ön Koşulu Sağlayacak Sistem (Varsa)
+    { width: 28 }, // Test Adım Verisi (Varsa)
+    { width: 48 }, // Aksiyon
+    { width: 45 }, // Beklenen Sonuç
+    { width: 32 }, // Gerçekleşen Sonuç
+    { width: 28 }, // Açıklama
+  ];
+
+  // Header Row 1: Matching image 3 colors exactly
+  // Yellow (#FFC000) for A-F & J, Dark Green (#385723) with white text for G-I
+  const testDurumlariHeaders = [
+    { text: 'Test Durum No', bgColor: 'FFC000', fontColor: '000000' },
+    { text: 'Test Adım No', bgColor: 'FFC000', fontColor: '000000' },
+    { text: 'Sistem', bgColor: 'FFC000', fontColor: '000000' },
+    { text: 'Test Adım Ön Koşulu (Varsa)', bgColor: 'FFC000', fontColor: '000000' },
+    { text: 'Ön Koşulu Sağlayacak Sistem (Varsa)', bgColor: 'FFC000', fontColor: '000000' },
+    { text: 'Test Adım Verisi (Varsa)', bgColor: 'FFC000', fontColor: '000000' },
+    { text: 'Aksiyon', bgColor: '385723', fontColor: 'FFFFFF' },
+    { text: 'Beklenen Sonuç', bgColor: '385723', fontColor: 'FFFFFF' },
+    { text: 'Gerçekleşen Sonuç\n(Geçti/Kaldı/Koşturulmadı)', bgColor: '385723', fontColor: 'FFFFFF' },
+    { text: 'Açıklama', bgColor: 'FFC000', fontColor: '000000' },
+  ];
+
+  const tdHeaderRow = testDurumlariSheet.getRow(1);
+  tdHeaderRow.height = 32;
+
+  testDurumlariHeaders.forEach((col, idx) => {
+    const cell = tdHeaderRow.getCell(idx + 1);
+    cell.value = col.text;
+    formatCell(cell, {
+      fontBold: true,
+      fontColor: col.fontColor,
+      bgColor: col.bgColor,
+      align: 'center',
+      valign: 'middle',
+    });
+  });
+
+  testCases.forEach((tc, idx) => {
+    const tdNo = tcIdToTdNoMap[tc.id] || `TD.${String(idx + 1).padStart(2, '0')}`;
+    const sistem = tc.module || mainModuleOrReq || 'Sistem';
+    const prereqSystem = tc.customFields?.prereqSystem || 'İlgili Sistem';
+
+    let stepsArr: string[] = [];
+    if (Array.isArray(tc.steps) && tc.steps.length > 0) {
+      stepsArr = tc.steps;
+    } else if (typeof tc.steps === 'string' && (tc.steps as string).trim()) {
+      stepsArr = (tc.steps as string).split('\n').filter((s) => s.trim());
     }
 
-    const tcIdsList = matchedTCs.map((tc) => tc.id).join(', ');
+    if (stepsArr.length === 0) {
+      stepsArr = [tc.title];
+    }
 
-    rtmRows.push([
-      req.id,
-      req.title,
-      String(matchedTCs.length),
-      String(positiveCount),
-      String(negativeCount),
-      String(otherCount),
-      status,
-      tcIdsList || 'Henüz test eklenmedi',
-    ]);
+    stepsArr.forEach((stepTextRaw, stepIdx) => {
+      const cleanAction = stepTextRaw.replace(/^\d+[\.\)]\s*/, '').trim();
+      const stepNo = `${tdNo}.${String(stepIdx + 1).padStart(2, '0')}`;
+
+      const stepPrecondition = stepIdx === 0 ? (tc.preconditions || '') : '';
+      const stepPrereqSystem = stepIdx === 0 && tc.preconditions ? prereqSystem : '';
+      const stepTestData = stepIdx === 0 ? (tc.testData || '') : '';
+      const stepDescription = stepIdx === 0 ? (tc.description || tc.testType || '') : '';
+
+      const row = testDurumlariSheet.addRow([
+        tdNo,
+        stepNo,
+        sistem,
+        stepPrecondition,
+        stepPrereqSystem,
+        stepTestData,
+        cleanAction,
+        tc.expectedResult || '',
+        'Koşturulmadı',
+        stepDescription,
+      ]);
+
+      row.height = 24;
+
+      formatCell(row.getCell(1), { align: 'center', fontBold: true });
+      formatCell(row.getCell(2), { align: 'center' });
+      formatCell(row.getCell(3), { align: 'left' });
+      formatCell(row.getCell(4), { align: 'left' });
+      formatCell(row.getCell(5), { align: 'left' });
+      formatCell(row.getCell(6), { align: 'left' });
+      formatCell(row.getCell(7), { align: 'left' });
+      formatCell(row.getCell(8), { align: 'left' });
+      formatCell(row.getCell(9), { align: 'center' });
+      formatCell(row.getCell(10), { align: 'left' });
+    });
   });
 
-  const rtmSheet = XLSX.utils.aoa_to_sheet(rtmRows);
-  rtmSheet['!cols'] = [
-    { wch: 22 },
-    { wch: 38 },
-    { wch: 22 },
-    { wch: 18 },
-    { wch: 18 },
-    { wch: 20 },
-    { wch: 28 },
-    { wch: 45 },
-  ];
-
-  XLSX.utils.book_append_sheet(wb, rtmSheet, 'Traceability Matrix (RTM)');
-
-  // 3. Build Executive Summary Sheet
-  const summaryRows = [
-    ['Test Projesi Yönetici Özeti', ''],
-    ['Rapor Oluşturulma Tarihi', new Date().toLocaleString('tr-TR')],
-    ['Kullanılan Şablon Yapısı', template.templateName],
-    [''],
-    ['Metrik', 'Değer'],
-    ['Toplam Analiz Edilen Gereksinim', String(requirements.length)],
-    ['Toplam Üretilen Test Senaryosu', String(testCases.length)],
-    ['Pozitif (Happy Path) Senaryo Sayısı', String(testCases.filter((tc) => tc.testType === 'Pozitif').length)],
-    ['Negatif / Hatalı Durum Senaryo Sayısı', String(testCases.filter((tc) => tc.testType === 'Negatif').length)],
-    ['Sınır Değer (Boundary) Senaryoları', String(testCases.filter((tc) => tc.testType === 'Sınır Değer (Boundary)').length)],
-    ['Güvenlik / Yetkilendirme Senaryoları', String(testCases.filter((tc) => tc.testType === 'Güvenlik').length)],
-    ['Yüksek Öncelikli (High Priority) Testler', String(testCases.filter((tc) => tc.priority === 'Yüksek' || tc.priority === 'High').length)],
-    ['Ortalama Gereksinim Başına Test Sayısı', requirements.length > 0 ? (testCases.length / requirements.length).toFixed(1) : '0'],
-  ];
-
-  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
-  summarySheet['!cols'] = [{ wch: 38 }, { wch: 30 }];
-  XLSX.utils.book_append_sheet(wb, summarySheet, 'Test Metrikleri Özeti');
-
-  // Trigger download
-  XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`);
+  // Write and trigger download in browser
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`;
+  anchor.click();
+  window.URL.revokeObjectURL(url);
 }
+
