@@ -72,3 +72,74 @@ export function sortTestCasesById(testCases: TestCase[]): TestCase[] {
     return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
   });
 }
+
+export interface ResequenceResult {
+  resequencedTestCases: TestCase[];
+  idMap: Record<string, string>;
+}
+
+/**
+ * Resequences test case IDs sequentially (e.g. 001, 002, 003...) for each prefix group.
+ * Ensures that deleting or inserting a test case automatically reorders all IDs sequentially.
+ */
+export function resequenceTestCaseIds(testCases: TestCase[]): ResequenceResult {
+  if (!testCases || testCases.length === 0) {
+    return { resequencedTestCases: [], idMap: {} };
+  }
+
+  // Sort deterministically first
+  const sorted = sortTestCasesById(testCases);
+
+  // Group by prefix extracted from ID or derived from reqId
+  const prefixGroups = new Map<string, { tc: TestCase; originalIndex: number; padLen: number }[]>();
+
+  sorted.forEach((tc, idx) => {
+    let prefix = '';
+    let padLen = 3;
+
+    if (tc.id) {
+      const match = tc.id.match(/^(.*?[-_])(\d+)$/);
+      if (match) {
+        prefix = match[1];
+        padLen = Math.max(match[2].length, 2);
+      }
+    }
+
+    if (!prefix) {
+      const sampleReqId = tc.reqId || '01';
+      let cleanCode = sampleReqId.replace(/^REQ[-_]?/i, '').replace(/[^a-zA-Z0-9]/g, '');
+      if (!cleanCode) cleanCode = '01';
+      prefix = `TC-${cleanCode}-`;
+    }
+
+    if (!prefixGroups.has(prefix)) {
+      prefixGroups.set(prefix, []);
+    }
+    prefixGroups.get(prefix)!.push({ tc, originalIndex: idx, padLen });
+  });
+
+  const resequencedTestCases: TestCase[] = [...sorted];
+  const idMap: Record<string, string> = {};
+
+  prefixGroups.forEach((items, prefix) => {
+    const maxPadLen = items.reduce((max, item) => Math.max(max, item.padLen), 3);
+
+    items.forEach((item, seqIdx) => {
+      const newNum = seqIdx + 1;
+      const newId = `${prefix}${String(newNum).padStart(maxPadLen, '0')}`;
+      const oldId = item.tc.id;
+
+      if (oldId) {
+        idMap[oldId] = newId;
+      }
+
+      resequencedTestCases[item.originalIndex] = {
+        ...item.tc,
+        id: newId,
+      };
+    });
+  });
+
+  return { resequencedTestCases, idMap };
+}
+

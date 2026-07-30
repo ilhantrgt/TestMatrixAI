@@ -28,7 +28,7 @@ import {
   UserProfile,
 } from './types';
 import { exportTestCasesToExcel } from './utils/excelHelper';
-import { generateNextTestCaseId, sortTestCasesById } from './utils/idGenerator';
+import { generateNextTestCaseId, sortTestCasesById, resequenceTestCaseIds } from './utils/idGenerator';
 import {
   FileSpreadsheet,
   Layers,
@@ -300,7 +300,8 @@ export default function App() {
 
       const data: GenerationResult = await response.json();
       setRequirements(data.requirements || []);
-      setTestCases(sortTestCasesById(data.testCases || []));
+      const { resequencedTestCases } = resequenceTestCaseIds(data.testCases || []);
+      setTestCases(resequencedTestCases);
       setGenerationStats(data.stats);
       setRecommendations(data.recommendations || []);
       setActiveTab('matrix');
@@ -340,7 +341,6 @@ export default function App() {
         if (resData.newTestCases && resData.newTestCases.length > 0) {
           addedCount = resData.newTestCases.length;
           setTestCases((prev) => {
-            const newCasesWithSequentialIds: TestCase[] = [];
             let currentList = [...prev];
             for (const rawTc of resData.newTestCases) {
               const sequentialId = generateNextTestCaseId(reqId, currentList);
@@ -349,10 +349,10 @@ export default function App() {
                 id: sequentialId,
                 reqId: reqId,
               };
-              newCasesWithSequentialIds.push(formattedTc);
               currentList.push(formattedTc);
             }
-            return sortTestCasesById(currentList);
+            const { resequencedTestCases } = resequenceTestCaseIds(currentList);
+            return resequencedTestCases;
           });
           setRequirements((prevReqs) =>
             prevReqs.map((r) =>
@@ -391,17 +391,46 @@ export default function App() {
     return totalAdded;
   };
 
-  // CRUD Operations on Test Cases
+  // CRUD Operations on Test Cases with Sequential Auto-Reordering
   const handleUpdateTestCase = (updatedTc: TestCase) => {
-    setTestCases((prev) => sortTestCasesById(prev.map((tc) => (tc.id === updatedTc.id ? updatedTc : tc))));
+    setTestCases((prev) => {
+      const updated = prev.map((tc) => (tc.id === updatedTc.id ? updatedTc : tc));
+      const { resequencedTestCases } = resequenceTestCaseIds(updated);
+      return resequencedTestCases;
+    });
   };
 
   const handleDeleteTestCase = (tcId: string) => {
-    setTestCases((prev) => prev.filter((tc) => tc.id !== tcId));
+    setTestCases((prev) => {
+      const filtered = prev.filter((tc) => tc.id !== tcId);
+      const { resequencedTestCases, idMap } = resequenceTestCaseIds(filtered);
+
+      // Remap test runs if test case IDs shifted
+      if (Object.keys(idMap).length > 0) {
+        setTestRuns((prevRuns) =>
+          prevRuns.map((run) => {
+            const newExecutions: Record<string, any> = {};
+            Object.entries(run.executions || {}).forEach(([oldId, exec]) => {
+              if (oldId !== tcId) {
+                const targetId = idMap[oldId] || oldId;
+                newExecutions[targetId] = { ...(exec as object), tcId: targetId };
+              }
+            });
+            return { ...run, executions: newExecutions };
+          })
+        );
+      }
+
+      return resequencedTestCases;
+    });
   };
 
   const handleAddTestCase = (newTc: TestCase) => {
-    setTestCases((prev) => sortTestCasesById([...prev, newTc]));
+    setTestCases((prev) => {
+      const combined = [...prev, newTc];
+      const { resequencedTestCases } = resequenceTestCaseIds(combined);
+      return resequencedTestCases;
+    });
   };
 
   // Direct Excel Export
