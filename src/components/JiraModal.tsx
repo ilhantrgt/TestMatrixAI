@@ -30,8 +30,17 @@ export const JiraModal: React.FC<JiraModalProps> = ({
   const [testResult, setTestResult] = useState<string | null>(null);
 
   useEffect(() => {
-    setForm(jiraConfig);
-  }, [jiraConfig]);
+    if (isOpen) {
+      setForm(jiraConfig || {
+        domain: '',
+        userEmail: '',
+        apiToken: '',
+        projectKey: 'TEST',
+        issueType: 'Bug',
+      });
+      setTestResult(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -90,7 +99,7 @@ export const JiraModal: React.FC<JiraModalProps> = ({
             <input
               type="text"
               placeholder="Örn: sirketiniz.atlassian.net"
-              value={form.domain}
+              value={form.domain || ''}
               onChange={(e) => setForm({ ...form, domain: e.target.value })}
               className="w-full bg-[#0A0C10] border border-white/10 rounded-xl p-2.5 text-white font-mono placeholder-slate-500 focus:outline-none focus:border-blue-500"
             />
@@ -105,7 +114,7 @@ export const JiraModal: React.FC<JiraModalProps> = ({
             <input
               type="email"
               placeholder="Örn: qa.engineer@company.com"
-              value={form.userEmail}
+              value={form.userEmail || ''}
               onChange={(e) => setForm({ ...form, userEmail: e.target.value })}
               className="w-full bg-[#0A0C10] border border-white/10 rounded-xl p-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
             />
@@ -120,7 +129,7 @@ export const JiraModal: React.FC<JiraModalProps> = ({
             <input
               type="password"
               placeholder="ATATT3xFfGF0r..."
-              value={form.apiToken}
+              value={form.apiToken || ''}
               onChange={(e) => setForm({ ...form, apiToken: e.target.value })}
               className="w-full bg-[#0A0C10] border border-white/10 rounded-xl p-2.5 text-white font-mono placeholder-slate-500 focus:outline-none focus:border-blue-500"
             />
@@ -136,7 +145,7 @@ export const JiraModal: React.FC<JiraModalProps> = ({
               <input
                 type="text"
                 placeholder="Örn: PROJ veya QA"
-                value={form.projectKey}
+                value={form.projectKey || ''}
                 onChange={(e) => setForm({ ...form, projectKey: e.target.value.toUpperCase() })}
                 className="w-full bg-[#0A0C10] border border-white/10 rounded-xl p-2.5 text-white font-mono font-bold uppercase placeholder-slate-500 focus:outline-none focus:border-blue-500"
               />
@@ -148,7 +157,7 @@ export const JiraModal: React.FC<JiraModalProps> = ({
                 Hata Tipi (Issue Type):
               </label>
               <select
-                value={form.issueType}
+                value={form.issueType || 'Bug'}
                 onChange={(e) => setForm({ ...form, issueType: e.target.value })}
                 className="w-full bg-[#0A0C10] border border-white/10 rounded-xl p-2.5 text-white outline-none focus:border-blue-500"
               >

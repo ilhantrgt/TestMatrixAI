@@ -128,8 +128,16 @@ export default function App() {
     issueType: 'Bug',
   };
 
+  const getGuestJiraConfig = (): JiraConfig => {
+    const saved = localStorage.getItem('tm_jira_config');
+    if (saved) {
+      try { return JSON.parse(saved); } catch {}
+    }
+    return DEFAULT_JIRA_CONFIG;
+  };
+
   const [isJiraModalOpen, setIsJiraModalOpen] = useState(false);
-  const [jiraConfig, setJiraConfig] = useState<JiraConfig>(DEFAULT_JIRA_CONFIG);
+  const [jiraConfig, setJiraConfig] = useState<JiraConfig>(getGuestJiraConfig);
 
   const handleSaveJiraConfig = (newConfig: JiraConfig) => {
     setJiraConfig(newConfig);
@@ -163,7 +171,7 @@ export default function App() {
       setRecommendations([]);
       setTestRuns(DEFAULT_TEST_RUNS);
       setRequirementText(SAMPLE_REQUIREMENT_DOCS[0].content);
-      setJiraConfig(DEFAULT_JIRA_CONFIG);
+      setJiraConfig(getGuestJiraConfig());
       return;
     }
 
