@@ -1,5 +1,5 @@
 {
-  "name": "TestMatrix AI - Test Case & RTM Jeneratörü",
+  "name": "TestMatrix AI - Gereksinim Dökümanından Otomatik Test Case & RTM",
   "description": "Gereksinim dökümanlarından Excel şablonunuza %100 uyumlu otomatik Test Case ve İzlenebilirlik Matrisi (RTM) oluşturan yapay zeka test mühendisliği aracı.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

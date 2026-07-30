@@ -57,6 +57,13 @@ app.post('/api/generate-test-cases', async (req, res) => {
       : [];
     const allSelectedTypes = [...selectedFunctional, ...selectedNonFunctional];
 
+    if (allSelectedTypes.length === 0) {
+      return res.status(400).json({
+        error: 'Test case üretimi için en az bir test tekniği seçilmelidir.',
+        details: 'Lütfen Fonksiyonel veya Fonksiyonel Olmayan Testler bölümünden en az 1 teknik seçiniz.',
+      });
+    }
+
     let testTypesDirective = '';
     if (allSelectedTypes.length > 0) {
       testTypesDirective = `

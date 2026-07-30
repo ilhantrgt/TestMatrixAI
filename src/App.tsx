@@ -278,6 +278,15 @@ export default function App() {
   const handleGenerate = async () => {
     if (!requirementText.trim()) return;
 
+    const selectedFunctional = generationConfig.selectedFunctionalTypes || [];
+    const selectedNonFunctional = generationConfig.selectedNonFunctionalTypes || [];
+    if (selectedFunctional.length + selectedNonFunctional.length === 0) {
+      setErrorMessage(
+        'Lütfen test case üretimi için en az bir test tekniği seçiniz! (Fonksiyonel veya Fonksiyonel Olmayan Testler bölümünden seçim yapabilirsiniz).'
+      );
+      return;
+    }
+
     setIsGenerating(true);
     setErrorMessage(null);
 

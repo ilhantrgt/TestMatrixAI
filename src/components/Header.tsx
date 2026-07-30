@@ -46,8 +46,8 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <p className="text-xs text-slate-400 hidden sm:block">
               {language === 'tr'
-                ? 'Gereksinim Dökümanından Otomatik Test Case & RTM Jeneratörü'
-                : 'Automated Test Case & RTM Generator from SRS / PRD'}
+                ? 'Gereksinim Dökümanından Otomatik Test Case & RTM'
+                : 'Automated Test Case & RTM from SRS / PRD'}
             </p>
           </div>
         </div>

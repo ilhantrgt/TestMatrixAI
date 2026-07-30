@@ -14,6 +14,7 @@ import {
   FileSpreadsheet,
   CheckCircle2,
   Layers,
+  AlertTriangle,
 } from 'lucide-react';
 import { parseExcelToRequirementText } from '../utils/excelHelper';
 import {
@@ -457,6 +458,16 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
           </div>
         )}
 
+        {/* Validation Warning when 0 techniques selected */}
+        {selectedFunctional.length + selectedNonFunctional.length === 0 && (
+          <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl flex items-center gap-2.5 text-xs text-rose-300 font-medium animate-in fade-in duration-150">
+            <AlertTriangle className="w-4.5 h-4.5 text-rose-400 shrink-0" />
+            <span>
+              <strong>En az 1 test tekniği seçilmelidir:</strong> Test case'lerin neye göre üretileceğini belirlemek için lütfen yukarıdaki Fonksiyonel veya Fonksiyonel Olmayan Testler bölümünden en az bir teknik işaretleyin.
+            </span>
+          </div>
+        )}
+
         {/* Primary Action Button */}
         <div className="pt-2 flex items-center justify-between">
           <div className="text-xs text-slate-400 flex items-center gap-1">
@@ -465,10 +476,21 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
           </div>
 
           <button
-            onClick={onGenerate}
-            disabled={isGenerating || !requirementText.trim()}
+            onClick={() => {
+              if (selectedFunctional.length + selectedNonFunctional.length === 0) {
+                alert('Lütfen test case üretimi için en az bir test tekniği seçiniz! (Fonksiyonel veya Fonksiyonel Olmayan Testler bölümünden seçim yapabilirsiniz).');
+                return;
+              }
+              onGenerate();
+            }}
+            disabled={isGenerating || !requirementText.trim() || selectedFunctional.length + selectedNonFunctional.length === 0}
+            title={
+              selectedFunctional.length + selectedNonFunctional.length === 0
+                ? 'Test case üretimi için en az 1 test tekniği seçilmelidir'
+                : undefined
+            }
             className={`flex items-center gap-2.5 px-6 py-3 rounded-xl font-bold text-sm text-white transition-all transform ${
-              isGenerating || !requirementText.trim()
+              isGenerating || !requirementText.trim() || selectedFunctional.length + selectedNonFunctional.length === 0
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 : 'bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 shadow-xl shadow-indigo-600/30 hover:scale-[1.02] active:scale-95'
             }`}
