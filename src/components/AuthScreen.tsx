@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
-import { saveUserProfileToCloud, findUserInCloudByEmail } from '../firebase';
+import { saveUserProfileToCloud, findUserInCloudByEmail, auth, googleProvider } from '../firebase';
+import { signInWithPopup } from 'firebase/auth';
 import {
   Sparkles,
   Lock,
@@ -41,15 +42,6 @@ const DEFAULT_DEMO_USERS: UserProfile[] = [
     email: 'ece.po@company.com',
     password: '123456',
     role: 'Senior Product Owner',
-    provider: 'email',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'usr_demo_ilhan',
-    name: 'İlhan Turgut',
-    email: 'ilhantrgt@gmail.com',
-    password: '123456',
-    role: 'QA Architect',
     provider: 'email',
     createdAt: new Date().toISOString(),
   },
@@ -244,12 +236,42 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   };
 
   // Handle Google Sign In
-  const handleGoogleSignInClick = () => {
-    setIsGoogleModalOpen(true);
+  const handleGoogleSignInClick = async () => {
+    setIsSubmitting(true);
+    setErrorMsg('');
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user && result.user.email) {
+        const email = result.user.email.toLowerCase();
+        const name = result.user.displayName || email.split('@')[0];
+        await handleConfirmGoogleLogin(email, name);
+        return;
+      }
+    } catch (err: any) {
+      console.info('Google popup auth bypassed/blocked, showing dynamic login prompt:', err?.message || err);
+      // Popup blocked or canceled in iframe environment, open dynamic modal with clean empty form
+      setGoogleEmailInput('');
+      setGoogleNameInput('');
+      setIsGoogleModalOpen(true);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleConfirmGoogleLogin = async (selectedEmail?: string, selectedName?: string) => {
-    const finalEmail = (selectedEmail || googleEmailInput || 'ilhantrgt@gmail.com').trim().toLowerCase();
+    setErrorMsg('');
+    const rawEmail = selectedEmail || googleEmailInput;
+
+    if (!rawEmail || !rawEmail.trim() || !rawEmail.includes('@')) {
+      setErrorMsg(
+        isEn
+          ? 'Please enter a valid Google email address.'
+          : 'Lütfen geçerli bir Google e-posta adresi giriniz.'
+      );
+      return;
+    }
+
+    const finalEmail = rawEmail.trim().toLowerCase();
 
     let finalName = (selectedName || googleNameInput || '').trim();
     if (!finalName || finalName === 'Google Kullanıcısı') {
@@ -741,70 +763,48 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               </p>
             </div>
 
-            {/* Quick pre-set Google accounts */}
-            <div className="space-y-2">
-              <button
-                onClick={() =>
-                  handleConfirmGoogleLogin(
-                    'ilhantrgt@gmail.com',
-                    'İlhan Turgut'
-                  )
-                }
-                className="w-full bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl p-3 flex items-center gap-3 transition-colors text-left"
-              >
-                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center">
-                  IT
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-white">İlhan Turgut</p>
-                  <p className="text-[11px] text-slate-400">ilhantrgt@gmail.com</p>
-                </div>
-                <Check className="w-4 h-4 text-emerald-400 ml-auto" />
-              </button>
+            {/* Clean Custom Google Email input */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  {isEn ? 'Google Email Address' : 'Google E-Posta Adresiniz'}
+                </label>
+                <input
+                  type="email"
+                  value={googleEmailInput}
+                  onChange={(e) => setGoogleEmailInput(e.target.value)}
+                  placeholder={isEn ? 'your.name@gmail.com' : 'adiniz@gmail.com'}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  {isEn ? 'Full Name (Optional)' : 'Ad Soyad (Opsiyonel)'}
+                </label>
+                <input
+                  type="text"
+                  value={googleNameInput}
+                  onChange={(e) => setGoogleNameInput(e.target.value)}
+                  placeholder={isEn ? 'Your Name' : 'Adınız Soyadınız'}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
 
               <button
-                onClick={() =>
-                  handleConfirmGoogleLogin(
-                    'qa.specialist@gmail.com',
-                    'Canan Özkan'
-                  )
-                }
-                className="w-full bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl p-3 flex items-center gap-3 transition-colors text-left"
-              >
-                <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center">
-                  CÖ
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-white">Canan Özkan</p>
-                  <p className="text-[11px] text-slate-400">qa.specialist@gmail.com</p>
-                </div>
-              </button>
-            </div>
-
-            {/* Custom Google Email input */}
-            <div className="pt-2 border-t border-slate-800 space-y-2">
-              <p className="text-[11px] text-slate-400 font-medium">
-                {isEn ? 'Farklı bir Google hesabı kullan:' : 'Farklı Google e-postası girin:'}
-              </p>
-              <input
-                type="email"
-                value={googleEmailInput}
-                onChange={(e) => setGoogleEmailInput(e.target.value)}
-                placeholder="kullanici@gmail.com"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-              />
-              <input
-                type="text"
-                value={googleNameInput}
-                onChange={(e) => setGoogleNameInput(e.target.value)}
-                placeholder={isEn ? 'Full Name (Optional)' : 'Ad Soyad (Opsiyonel)'}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-              />
-              <button
+                type="button"
+                disabled={isSubmitting}
                 onClick={() => handleConfirmGoogleLogin()}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-xl transition-colors shadow-md"
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2.5 rounded-xl transition-colors shadow-md flex items-center justify-center gap-2"
               >
-                {isEn ? 'Continue with this Google Email' : 'Bu Google Hesabı ile Devam Et'}
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>{isEn ? 'Connecting...' : 'Bağlanıyor...'}</span>
+                  </>
+                ) : (
+                  <span>{isEn ? 'Continue with Google Account' : 'Google Hesabı ile Devam Et'}</span>
+                )}
               </button>
             </div>
 

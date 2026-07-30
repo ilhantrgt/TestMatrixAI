@@ -9,6 +9,7 @@ import { CoverageReportView } from './components/CoverageReportView';
 import { TestExecutionView } from './components/TestExecutionView';
 import { JiraModal } from './components/JiraModal';
 import { AddTestCaseModal } from './components/AddTestCaseModal';
+import { UserGuideModal } from './components/UserGuideModal';
 import { PRESET_TEMPLATES } from './data/presetTemplates';
 import { SAMPLE_REQUIREMENT_DOCS } from './data/sampleRequirements';
 import { AuthScreen } from './components/AuthScreen';
@@ -137,6 +138,7 @@ export default function App() {
   };
 
   const [isJiraModalOpen, setIsJiraModalOpen] = useState(false);
+  const [isGuideModalOpen, setIsGuideModalOpen] = useState(false);
   const [jiraConfig, setJiraConfig] = useState<JiraConfig>(getGuestJiraConfig);
 
   const handleSaveJiraConfig = (newConfig: JiraConfig) => {
@@ -538,6 +540,7 @@ export default function App() {
         templateName={activeTemplate.templateName}
         onOpenTemplateModal={() => setIsTemplateModalOpen(true)}
         onOpenJiraModal={() => setIsJiraModalOpen(true)}
+        onOpenGuideModal={() => setIsGuideModalOpen(true)}
         onExportExcel={handleExportExcel}
         onReset={handleReset}
         hasTestCases={testCases.length > 0}
@@ -783,6 +786,13 @@ export default function App() {
         onClose={() => setIsJiraModalOpen(false)}
         jiraConfig={jiraConfig}
         onSaveConfig={handleSaveJiraConfig}
+        language={generationConfig.language}
+      />
+
+      {/* User Guide Modal */}
+      <UserGuideModal
+        isOpen={isGuideModalOpen}
+        onClose={() => setIsGuideModalOpen(false)}
         language={generationConfig.language}
       />
 

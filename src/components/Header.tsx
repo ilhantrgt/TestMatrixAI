@@ -1,11 +1,12 @@
 import React from 'react';
-import { FileSpreadsheet, Sparkles, Download, RefreshCw, Globe, LogOut, User, Cloud, CloudCheck } from 'lucide-react';
+import { FileSpreadsheet, Sparkles, Download, RefreshCw, Globe, LogOut, User, Cloud, CloudCheck, BookOpen } from 'lucide-react';
 import { UserProfile } from '../types';
 
 interface HeaderProps {
   templateName: string;
   onOpenTemplateModal: () => void;
   onOpenJiraModal: () => void;
+  onOpenGuideModal?: () => void;
   onExportExcel: () => void;
   onReset: () => void;
   hasTestCases: boolean;
@@ -20,6 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
   templateName,
   onOpenTemplateModal,
   onOpenJiraModal,
+  onOpenGuideModal,
   onExportExcel,
   onReset,
   hasTestCases,
@@ -121,6 +123,18 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
               )}
             </div>
+          )}
+
+          {/* Kullanıcı Kılavuzu (User Guide) Button */}
+          {onOpenGuideModal && (
+            <button
+              onClick={onOpenGuideModal}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 transition-colors"
+              title={language === 'tr' ? 'Kullanıcı Kılavuzu ve Yardım' : 'User Manual & Guide'}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">{language === 'tr' ? 'Kılavuz' : 'User Guide'}</span>
+            </button>
           )}
 
           {/* Jira Integration Button */}
