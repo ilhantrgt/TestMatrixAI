@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
-import { UserProfile, RequirementItem, TestCase, TestRun } from './types';
+import { UserProfile, RequirementItem, TestCase, TestRun, JiraConfig } from './types';
 
 const app = initializeApp(firebaseConfig);
 
@@ -31,6 +31,7 @@ export interface UserCloudWorkspace {
   testRuns?: TestRun[];
   generationStats?: any;
   recommendations?: string[];
+  jiraConfig?: JiraConfig;
   updatedAt?: string;
 }
 
@@ -146,6 +147,7 @@ export async function saveUserDataToCloud(
     if (data.testRuns !== undefined) cleanData.testRuns = data.testRuns;
     if (data.generationStats !== undefined) cleanData.generationStats = data.generationStats;
     if (data.recommendations !== undefined) cleanData.recommendations = data.recommendations;
+    if (data.jiraConfig !== undefined) cleanData.jiraConfig = data.jiraConfig;
 
     await setDoc(dataRef, cleanData, { merge: true });
   } catch (error: any) {

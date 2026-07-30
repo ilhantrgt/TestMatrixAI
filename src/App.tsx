@@ -120,28 +120,25 @@ export default function App() {
   };
 
   // Jira Integration State
+  const DEFAULT_JIRA_CONFIG: JiraConfig = {
+    domain: '',
+    userEmail: '',
+    apiToken: '',
+    projectKey: 'TEST',
+    issueType: 'Bug',
+  };
+
   const [isJiraModalOpen, setIsJiraModalOpen] = useState(false);
-  const [jiraConfig, setJiraConfig] = useState<JiraConfig>(() => {
-    const saved = localStorage.getItem('tm_jira_config');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        // ignore
-      }
-    }
-    return {
-      domain: '',
-      userEmail: '',
-      apiToken: '',
-      projectKey: 'TEST',
-      issueType: 'Bug',
-    };
-  });
+  const [jiraConfig, setJiraConfig] = useState<JiraConfig>(DEFAULT_JIRA_CONFIG);
 
   const handleSaveJiraConfig = (newConfig: JiraConfig) => {
     setJiraConfig(newConfig);
-    localStorage.setItem('tm_jira_config', JSON.stringify(newConfig));
+    if (currentUser?.id) {
+      localStorage.setItem(`tm_jira_config_${currentUser.id}`, JSON.stringify(newConfig));
+      saveUserDataToCloud(currentUser.id, { jiraConfig: newConfig });
+    } else {
+      localStorage.setItem('tm_jira_config', JSON.stringify(newConfig));
+    }
   };
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -166,14 +163,28 @@ export default function App() {
       setRecommendations([]);
       setTestRuns(DEFAULT_TEST_RUNS);
       setRequirementText(SAMPLE_REQUIREMENT_DOCS[0].content);
+      setJiraConfig(DEFAULT_JIRA_CONFIG);
       return;
     }
 
     let isMounted = true;
     setIsCloudSyncReady(false);
 
-    // 1. First load from user-scoped localStorage cache for fast startup
     const userCacheKey = `tm_workspace_${currentUser.id}`;
+    const userJiraCacheKey = `tm_jira_config_${currentUser.id}`;
+
+    // 1. First load Jira config & workspace from user-scoped localStorage cache for fast startup
+    const cachedJira = localStorage.getItem(userJiraCacheKey);
+    if (cachedJira) {
+      try {
+        setJiraConfig(JSON.parse(cachedJira));
+      } catch {
+        setJiraConfig(DEFAULT_JIRA_CONFIG);
+      }
+    } else {
+      setJiraConfig(DEFAULT_JIRA_CONFIG);
+    }
+
     const cachedLocal = localStorage.getItem(userCacheKey);
     if (cachedLocal) {
       try {
@@ -183,6 +194,7 @@ export default function App() {
         setTestRuns(parsed.testRuns || DEFAULT_TEST_RUNS);
         setGenerationStats(parsed.generationStats || null);
         setRecommendations(parsed.recommendations || []);
+        if (parsed.jiraConfig) setJiraConfig(parsed.jiraConfig);
         if (parsed.requirementText) setRequirementText(parsed.requirementText);
       } catch {
         // ignore
@@ -211,6 +223,10 @@ export default function App() {
           );
           setGenerationStats(cloudData.generationStats || null);
           setRecommendations(cloudData.recommendations || []);
+          if (cloudData.jiraConfig) {
+            setJiraConfig(cloudData.jiraConfig);
+            localStorage.setItem(userJiraCacheKey, JSON.stringify(cloudData.jiraConfig));
+          }
           if (cloudData.requirementText) {
             setRequirementText(cloudData.requirementText);
           }
@@ -231,6 +247,9 @@ export default function App() {
       if (updatedData.generationStats !== undefined) setGenerationStats(updatedData.generationStats);
       if (updatedData.recommendations !== undefined) setRecommendations(updatedData.recommendations);
       if (updatedData.requirementText !== undefined) setRequirementText(updatedData.requirementText);
+      if (updatedData.jiraConfig !== undefined) {
+        setJiraConfig(updatedData.jiraConfig || DEFAULT_JIRA_CONFIG);
+      }
     });
 
     return () => {
@@ -250,6 +269,7 @@ export default function App() {
       testRuns,
       generationStats,
       recommendations,
+      jiraConfig,
     };
 
     // Save to user-scoped localStorage
@@ -270,6 +290,7 @@ export default function App() {
     testRuns,
     generationStats,
     recommendations,
+    jiraConfig,
   ]);
 
   const [activeTab, setActiveTab] = useState<'matrix' | 'execution' | 'coverage' | 'rtm' | 'stats'>('matrix');
