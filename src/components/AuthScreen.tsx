@@ -65,11 +65,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [rememberMe, setRememberMe] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Google Modal State
-  const [isGoogleModalOpen, setIsGoogleModalOpen] = useState(false);
-  const [googleEmailInput, setGoogleEmailInput] = useState('');
-  const [googleNameInput, setGoogleNameInput] = useState('');
-
   // Pre-saved users in localStorage with fallback to default demo users
   const getRegisteredUsers = (): UserProfile[] => {
     try {
@@ -244,94 +239,45 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       if (result.user && result.user.email) {
         const email = result.user.email.toLowerCase();
         const name = result.user.displayName || email.split('@')[0];
-        await handleConfirmGoogleLogin(email, name);
-        return;
-      }
-    } catch (err: any) {
-      console.info('Google popup auth bypassed/blocked, showing dynamic login prompt:', err?.message || err);
-      // Popup blocked or canceled in iframe environment, open dynamic modal with clean empty form
-      setGoogleEmailInput('');
-      setGoogleNameInput('');
-      setIsGoogleModalOpen(true);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+        const uid = result.user.uid;
+        const photoURL = result.user.photoURL || undefined;
 
-  const handleConfirmGoogleLogin = async (selectedEmail?: string, selectedName?: string) => {
-    setErrorMsg('');
-    const rawEmail = selectedEmail || googleEmailInput;
-
-    if (!rawEmail || !rawEmail.trim() || !rawEmail.includes('@')) {
-      setErrorMsg(
-        isEn
-          ? 'Please enter a valid Google email address.'
-          : 'Lütfen geçerli bir Google e-posta adresi giriniz.'
-      );
-      return;
-    }
-
-    const finalEmail = rawEmail.trim().toLowerCase();
-
-    let finalName = (selectedName || googleNameInput || '').trim();
-    if (!finalName || finalName === 'Google Kullanıcısı') {
-      const localPart = finalEmail.split('@')[0];
-      finalName = localPart
-        .split(/[._-]/)
-        .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-        .join(' ');
-    }
-
-    setIsSubmitting(true);
-    try {
-      // Look for existing account with same email in local storage or Firestore
-      const registeredUsers = getRegisteredUsers();
-      let existingUser = registeredUsers.find(
-        (u) => u.email.toLowerCase() === finalEmail
-      );
-
-      if (!existingUser) {
-        const cloudUser = await findUserInCloudByEmail(finalEmail);
-        if (cloudUser) existingUser = cloudUser;
-      }
-
-      let googleUser: UserProfile;
-
-      if (existingUser) {
-        googleUser = {
-          ...existingUser,
-          name: existingUser.name && existingUser.name !== 'Google Kullanıcısı' ? existingUser.name : finalName,
-          provider: 'google',
-        };
-      } else {
-        googleUser = {
-          id: 'usr_g_' + finalEmail.replace(/[^a-z0-9]/g, '_'),
-          name: finalName,
-          email: finalEmail,
+        const googleUser: UserProfile = {
+          id: uid,
+          name: name,
+          email: email,
           role: 'Software QA Engineer',
-          avatarUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(finalName)}`,
+          avatarUrl: photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
           provider: 'google',
           createdAt: new Date().toISOString(),
         };
-      }
 
-      saveRegisteredUser(googleUser);
-      setIsGoogleModalOpen(false);
-      onLoginSuccess(googleUser);
-    } catch (err) {
-      console.error('Google login error:', err);
-      // Fallback
-      const fallbackUser: UserProfile = {
-        id: 'usr_g_' + finalEmail.replace(/[^a-z0-9]/g, '_'),
-        name: finalName,
-        email: finalEmail,
-        role: 'Software QA Engineer',
-        provider: 'google',
-        createdAt: new Date().toISOString(),
-      };
-      saveRegisteredUser(fallbackUser);
-      setIsGoogleModalOpen(false);
-      onLoginSuccess(fallbackUser);
+        saveRegisteredUser(googleUser);
+        await saveUserProfileToCloud(googleUser);
+        onLoginSuccess(googleUser);
+        return;
+      }
+    } catch (err: any) {
+      console.error('Google Auth Popup error:', err);
+      if (err?.code === 'auth/popup-closed-by-user') {
+        setErrorMsg(
+          isEn
+            ? 'Google sign-in popup was closed before completing. Please try again.'
+            : 'Google giriş penceresi kapatıldı. Lütfen tekrar deneyiniz.'
+        );
+      } else if (err?.code === 'auth/popup-blocked') {
+        setErrorMsg(
+          isEn
+            ? 'Google sign-in popup was blocked by your browser. Please allow popups and try again.'
+            : 'Google giriş penceresi tarayıcınız tarafından engellendi. Lütfen açılır pencerelere izin verip tekrar deneyiniz.'
+        );
+      } else {
+        setErrorMsg(
+          isEn
+            ? `Google authentication failed (${err?.code || 'error'}). Please try again.`
+            : `Google doğrulama hatası (${err?.code || 'hata'}). Lütfen tekrar deneyiniz.`
+        );
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -727,96 +673,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       <footer className="text-center py-4 text-xs text-slate-500 border-t border-slate-900 relative z-10">
         <p>TestMatrix AI — ISTQB Standard Compliant Test Engineering Suite</p>
       </footer>
-
-      {/* Google Account Selector Modal */}
-      {isGoogleModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 space-y-5 shadow-2xl">
-            <div className="text-center space-y-2">
-              <div className="w-12 h-12 bg-white rounded-full mx-auto flex items-center justify-center shadow-md">
-                <svg className="w-6 h-6" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.27v3.14C3.25 21.27 7.31 24 12 24z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.59H1.27C.46 8.21 0 10.05 0 12s.46 3.79 1.27 5.41l4.01-3.14z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.25 2.73 1.27 6.59l4.01 3.14c.95-2.83 3.6-4.98 6.72-4.98z"
-                  />
-                </svg>
-              </div>
-              <h3 className="font-bold text-lg text-white">
-                {isEn ? 'Google Account Login' : 'Google ile Oturum Açın'}
-              </h3>
-              <p className="text-xs text-slate-400">
-                {isEn
-                  ? 'Select a saved Google profile or type custom Google email'
-                  : 'TestMatrix AI platformuna Google kimliğiniz ile bağlanın'}
-              </p>
-            </div>
-
-            {/* Clean Custom Google Email input */}
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  {isEn ? 'Google Email Address' : 'Google E-Posta Adresiniz'}
-                </label>
-                <input
-                  type="email"
-                  value={googleEmailInput}
-                  onChange={(e) => setGoogleEmailInput(e.target.value)}
-                  placeholder={isEn ? 'your.name@gmail.com' : 'adiniz@gmail.com'}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  {isEn ? 'Full Name (Optional)' : 'Ad Soyad (Opsiyonel)'}
-                </label>
-                <input
-                  type="text"
-                  value={googleNameInput}
-                  onChange={(e) => setGoogleNameInput(e.target.value)}
-                  placeholder={isEn ? 'Your Name' : 'Adınız Soyadınız'}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={() => handleConfirmGoogleLogin()}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2.5 rounded-xl transition-colors shadow-md flex items-center justify-center gap-2"
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    <span>{isEn ? 'Connecting...' : 'Bağlanıyor...'}</span>
-                  </>
-                ) : (
-                  <span>{isEn ? 'Continue with Google Account' : 'Google Hesabı ile Devam Et'}</span>
-                )}
-              </button>
-            </div>
-
-            <button
-              onClick={() => setIsGoogleModalOpen(false)}
-              className="w-full text-center text-xs text-slate-500 hover:text-slate-300 transition-colors pt-1"
-            >
-              {isEn ? 'Cancel' : 'İptal'}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
