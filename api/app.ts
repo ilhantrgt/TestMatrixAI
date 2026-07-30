@@ -406,8 +406,20 @@ app.post('/api/jira/create-issue', async (req, res) => {
     const domain = (jiraConfig.domain || process.env.JIRA_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const userEmail = jiraConfig.userEmail || process.env.JIRA_USER_EMAIL || '';
     const apiToken = jiraConfig.apiToken || process.env.JIRA_API_TOKEN || '';
-    const projectKey = jiraConfig.projectKey || reqProjectKey || process.env.JIRA_PROJECT_KEY || 'TEST';
+
+    // Sanitize Project Key (e.g. "[212868] NOVA" -> "NOVA")
+    let rawProjectKey = (jiraConfig.projectKey || reqProjectKey || process.env.JIRA_PROJECT_KEY || 'TEST').trim();
+    if (rawProjectKey.includes(']')) {
+      const parts = rawProjectKey.split(']').map((s: string) => s.replace(/\[/g, '').trim()).filter(Boolean);
+      rawProjectKey = parts[parts.length - 1] || parts[0] || 'TEST';
+    } else if (rawProjectKey.includes(' ')) {
+      rawProjectKey = rawProjectKey.split(' ')[0];
+    }
+    const projectKey = rawProjectKey.replace(/[^a-zA-Z0-9_]/g, '').toUpperCase() || 'TEST';
+
     const issueType = jiraConfig.issueType || reqIssueType || 'Bug';
+
+    let lastJiraApiError: string | null = null;
 
     // If real credentials are provided, call Jira REST API
     if (domain && userEmail && apiToken) {
@@ -416,7 +428,7 @@ app.post('/api/jira/create-issue', async (req, res) => {
 
       const jiraPayload = {
         fields: {
-          project: { key: projectKey.toUpperCase() },
+          project: { key: projectKey },
           summary: summary,
           description: description || `Automated bug created from TestMatrix AI for Test Case ${testCaseId || ''}`,
           issuetype: { name: issueType },
@@ -424,38 +436,51 @@ app.post('/api/jira/create-issue', async (req, res) => {
         },
       };
 
-      console.log(`[Jira Integration] Connecting to https://${domain}...`);
+      console.log(`[Jira Integration] Connecting to https://${domain} with Project Key '${projectKey}'...`);
 
-      const jiraRes = await fetch(jiraApiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': authHeader,
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(jiraPayload),
-      });
-
-      if (jiraRes.ok) {
-        const jiraData = await jiraRes.json();
-        const issueKey = jiraData.key;
-        const issueUrl = `https://${domain}/browse/${issueKey}`;
-
-        return res.json({
-          success: true,
-          issueKey,
-          issueUrl,
-          message: `Jira üzerinde ${issueKey} numaralı hata kaydı başarıyla oluşturuldu.`,
-          isSimulated: false,
+      try {
+        const jiraRes = await fetch(jiraApiUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': authHeader,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(jiraPayload),
         });
-      } else {
-        const errorText = await jiraRes.text();
-        console.warn('[Jira Integration] Direct API returned error, falling back to simulated ticket:', errorText);
+
+        if (jiraRes.ok) {
+          const jiraData = await jiraRes.json();
+          const issueKey = jiraData.key;
+          const issueUrl = `https://${domain}/browse/${issueKey}`;
+
+          return res.json({
+            success: true,
+            issueKey,
+            issueUrl,
+            message: `Jira üzerinde ${issueKey} numaralı hata kaydı başarıyla oluşturuldu.`,
+            isSimulated: false,
+          });
+        } else {
+          const errorText = await jiraRes.text();
+          console.warn('[Jira Integration] Direct API returned error status:', jiraRes.status, errorText);
+          let parsedDetails = errorText;
+          try {
+            const jsonErr = JSON.parse(errorText);
+            parsedDetails = jsonErr.errorMessages?.join(' | ') || JSON.stringify(jsonErr.errors) || errorText;
+          } catch {
+            parsedDetails = errorText;
+          }
+          lastJiraApiError = `Jira API HTTP ${jiraRes.status}: ${parsedDetails}`;
+        }
+      } catch (netErr: any) {
+        console.warn('[Jira Integration] Connection failed:', netErr?.message);
+        lastJiraApiError = `Sunucu '${domain}' adresine erişemedi (${netErr?.message || 'fetch failed'}). Jira sunucunuz şirket içi ağda (Intranet/VPN) olabilir veya domain adresi dış internet erişimine kapalıdır.`;
       }
     }
 
-    // Fallback mode if token is empty or invalid
-    const simulatedKey = `${projectKey.toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    // Fallback mode if token is empty or network failed
+    const simulatedKey = `${projectKey}-${Math.floor(1000 + Math.random() * 9000)}`;
     const targetDomain = domain || 'your-company.atlassian.net';
     const simulatedUrl = `https://${targetDomain}/browse/${simulatedKey}`;
 
@@ -463,10 +488,11 @@ app.post('/api/jira/create-issue', async (req, res) => {
       success: true,
       issueKey: simulatedKey,
       issueUrl: simulatedUrl,
-      message: domain && userEmail && apiToken
-        ? `Jira API yanıt verdi ancak simülasyon modu kullanıldı (${simulatedKey}).`
-        : `Jira API token girilmediği için simüle edilmiş ${simulatedKey} kaydı üretildi. Gerçek Jira bağlantısı için ayarları doldurabilirsiniz.`,
+      message: lastJiraApiError
+        ? `Gerçek Jira sunucusuna bağlanılamadı (${lastJiraApiError}). Test amaçlı ${simulatedKey} kaydı simüle edildi.`
+        : `Jira bilgileri eksik olduğu için simüle edilmiş ${simulatedKey} kaydı üretildi.`,
       isSimulated: true,
+      jiraErrorNotice: lastJiraApiError,
     });
   } catch (error: any) {
     console.error('Jira issue creation error:', error);

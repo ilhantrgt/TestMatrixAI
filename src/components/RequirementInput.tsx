@@ -176,7 +176,7 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
             <FileText className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="font-bold text-base text-white">1. Gereksinim Dökümanı (SRS / User Story)</h2>
+            <h2 className="font-bold text-base text-white">1. Gereksinim Dökümanı (GTD / TD / SRS / User Story)</h2>
             <p className="text-xs text-slate-400">
               Analiz edilecek iş gereksinimlerini metin olarak yapıştırın veya örnek döküman seçin.
             </p>

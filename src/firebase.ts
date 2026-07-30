@@ -9,6 +9,7 @@ import {
   query,
   where,
   getDocs,
+  disableNetwork,
 } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -33,10 +34,25 @@ export interface UserCloudWorkspace {
   updatedAt?: string;
 }
 
+let isFirestoreQuotaExceeded = false;
+
+function handleQuotaExceeded(err?: any) {
+  if (!isFirestoreQuotaExceeded) {
+    isFirestoreQuotaExceeded = true;
+    console.info(
+      '[TestMatrix AI] Firebase Firestore günlük ücretsiz kotası doldu. Verileriniz yerel tarayıcı hafızasında (localStorage) güvenle saklanmaya devam edecektir.'
+    );
+    try {
+      disableNetwork(db).catch(() => {});
+    } catch {}
+  }
+}
+
 /**
  * Saves user profile to Firestore `users/{userId}` document
  */
 export async function saveUserProfileToCloud(user: UserProfile): Promise<void> {
+  if (isFirestoreQuotaExceeded) return;
   try {
     const userRef = doc(db, 'users', user.id);
     await setDoc(
@@ -47,7 +63,15 @@ export async function saveUserProfileToCloud(user: UserProfile): Promise<void> {
       },
       { merge: true }
     );
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error?.code === 'resource-exhausted' ||
+      String(error).includes('resource-exhausted') ||
+      String(error).includes('Quota')
+    ) {
+      handleQuotaExceeded(error);
+      return;
+    }
     console.warn('Firebase saveUserProfileToCloud warning:', error);
   }
 }
@@ -56,13 +80,22 @@ export async function saveUserProfileToCloud(user: UserProfile): Promise<void> {
  * Loads user profile from Firestore `users/{userId}` document
  */
 export async function loadUserProfileFromCloud(userId: string): Promise<UserProfile | null> {
+  if (isFirestoreQuotaExceeded) return null;
   try {
     const userRef = doc(db, 'users', userId);
     const snap = await getDoc(userRef);
     if (snap.exists()) {
       return snap.data() as UserProfile;
     }
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error?.code === 'resource-exhausted' ||
+      String(error).includes('resource-exhausted') ||
+      String(error).includes('Quota')
+    ) {
+      handleQuotaExceeded(error);
+      return null;
+    }
     console.warn('Firebase loadUserProfileFromCloud warning:', error);
   }
   return null;
@@ -72,6 +105,7 @@ export async function loadUserProfileFromCloud(userId: string): Promise<UserProf
  * Searches for a user profile in Firestore by email address
  */
 export async function findUserInCloudByEmail(email: string): Promise<UserProfile | null> {
+  if (isFirestoreQuotaExceeded) return null;
   try {
     const usersRef = collection(db, 'users');
     const q = query(usersRef, where('email', '==', email.toLowerCase().trim()));
@@ -80,7 +114,15 @@ export async function findUserInCloudByEmail(email: string): Promise<UserProfile
       const docData = querySnapshot.docs[0].data();
       return docData as UserProfile;
     }
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error?.code === 'resource-exhausted' ||
+      String(error).includes('resource-exhausted') ||
+      String(error).includes('Quota')
+    ) {
+      handleQuotaExceeded(error);
+      return null;
+    }
     console.warn('Firebase findUserInCloudByEmail warning:', error);
   }
   return null;
@@ -93,7 +135,7 @@ export async function saveUserDataToCloud(
   userId: string,
   data: UserCloudWorkspace
 ): Promise<void> {
-  if (!userId) return;
+  if (!userId || isFirestoreQuotaExceeded) return;
   try {
     const dataRef = doc(db, 'userData', userId);
     // Remove undefined values
@@ -106,7 +148,15 @@ export async function saveUserDataToCloud(
     if (data.recommendations !== undefined) cleanData.recommendations = data.recommendations;
 
     await setDoc(dataRef, cleanData, { merge: true });
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error?.code === 'resource-exhausted' ||
+      String(error).includes('resource-exhausted') ||
+      String(error).includes('Quota')
+    ) {
+      handleQuotaExceeded(error);
+      return;
+    }
     console.warn('Firebase saveUserDataToCloud warning:', error);
   }
 }
@@ -115,14 +165,22 @@ export async function saveUserDataToCloud(
  * Loads user workspace data from `userData/{userId}`
  */
 export async function loadUserDataFromCloud(userId: string): Promise<UserCloudWorkspace | null> {
-  if (!userId) return null;
+  if (!userId || isFirestoreQuotaExceeded) return null;
   try {
     const dataRef = doc(db, 'userData', userId);
     const snap = await getDoc(dataRef);
     if (snap.exists()) {
       return snap.data() as UserCloudWorkspace;
     }
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error?.code === 'resource-exhausted' ||
+      String(error).includes('resource-exhausted') ||
+      String(error).includes('Quota')
+    ) {
+      handleQuotaExceeded(error);
+      return null;
+    }
     console.warn('Firebase loadUserDataFromCloud warning:', error);
   }
   return null;
@@ -135,17 +193,39 @@ export function subscribeToUserData(
   userId: string,
   onData: (data: UserCloudWorkspace) => void
 ): () => void {
-  if (!userId) return () => {};
+  if (!userId || isFirestoreQuotaExceeded) return () => {};
   const dataRef = doc(db, 'userData', userId);
-  return onSnapshot(
-    dataRef,
-    (snap) => {
-      if (snap.exists()) {
-        onData(snap.data() as UserCloudWorkspace);
+  let unsub: (() => void) | null = null;
+  try {
+    unsub = onSnapshot(
+      dataRef,
+      (snap) => {
+        if (snap.exists()) {
+          onData(snap.data() as UserCloudWorkspace);
+        }
+      },
+      (error: any) => {
+        if (
+          error?.code === 'resource-exhausted' ||
+          String(error).includes('resource-exhausted') ||
+          String(error).includes('Quota')
+        ) {
+          handleQuotaExceeded(error);
+          if (unsub) {
+            try { unsub(); } catch {}
+          }
+          return;
+        }
+        console.warn('Firebase subscribeToUserData listener warning:', error);
       }
-    },
-    (error) => {
-      console.warn('Firebase subscribeToUserData listener error:', error);
+    );
+  } catch (err: any) {
+    handleQuotaExceeded(err);
+  }
+
+  return () => {
+    if (unsub) {
+      try { unsub(); } catch {}
     }
-  );
+  };
 }
