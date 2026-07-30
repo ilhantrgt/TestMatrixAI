@@ -90,6 +90,14 @@ export default function App() {
   const [generationConfig, setGenerationConfig] = useState<GenerationConfig>({
     positiveCountPerReq: 2,
     negativeCountPerReq: 2,
+    selectedFunctionalTypes: [
+      'Pozitif (Fonksiyonel Doğruluk)',
+      'Negatif (Hata Yönetimi)',
+      'Sınır Değer Analizi (BVA)',
+    ],
+    selectedNonFunctionalTypes: [
+      'Güvenlik ve Yetki Testi (Security)',
+    ],
     includeBoundary: true,
     includeSecurity: true,
     includePerformance: false,
@@ -367,10 +375,20 @@ export default function App() {
     return addedCount;
   };
 
-  // Auto generate missing test cases for a specific requirement
+  // Auto generate missing test cases for a specific requirement across full ISTQB scope
   const handleAutoGenerateMissingForReq = async (req: RequirementItem): Promise<number> => {
-    const prompt = `Generate missing test scenarios for requirement ${req.id} (${req.title}). Focus on missing edge cases, negative flows, boundary values, and security checks.`;
+    const prompt = `EXPAND TEST COVERAGE: Please generate missing test scenarios for requirement ${req.id} (${req.title}) to achieve full ISTQB coverage. Generate test cases covering all remaining ISTQB test types: Negative error handling, Boundary Value Analysis (BVA), Equivalence Partitioning (EP), Security & Authorization, Performance/Load, and Usability/UX if not already present.`;
     return await handleRefineRequirement(req.id, prompt);
+  };
+
+  // Expand coverage across all requirements
+  const handleExpandAllCoverage = async (): Promise<number> => {
+    let totalAdded = 0;
+    for (const req of requirements) {
+      const added = await handleAutoGenerateMissingForReq(req);
+      totalAdded += added || 0;
+    }
+    return totalAdded;
   };
 
   // CRUD Operations on Test Cases
@@ -614,6 +632,7 @@ export default function App() {
                 }}
                 recommendations={recommendations}
                 onAutoGenerateMissing={handleAutoGenerateMissingForReq}
+                onExpandAllCoverage={handleExpandAllCoverage}
                 isRefining={Boolean(isRefiningReqId)}
                 isRefiningReqId={isRefiningReqId}
                 language={generationConfig.language}

@@ -28,8 +28,10 @@ interface CoverageReportViewProps {
   stats: GenerationStats;
   recommendations?: string[];
   onAutoGenerateMissing: (req: RequirementItem) => Promise<number | void> | void;
+  onExpandAllCoverage?: () => Promise<number | void> | void;
   isRefining: boolean;
   isRefiningReqId?: string | null;
+  language?: 'tr' | 'en';
 }
 
 export const CoverageReportView: React.FC<CoverageReportViewProps> = ({
@@ -38,13 +40,31 @@ export const CoverageReportView: React.FC<CoverageReportViewProps> = ({
   stats,
   recommendations,
   onAutoGenerateMissing,
+  onExpandAllCoverage,
   isRefining,
   isRefiningReqId,
+  language = 'tr',
 }) => {
   const [filter, setFilter] = useState<'all' | 'full' | 'partial' | 'uncovered'>('all');
   const [selectedReqId, setSelectedReqId] = useState<string | null>(null);
   const [completedReqIds, setCompletedReqIds] = useState<Set<string>>(new Set());
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [isExpandingAll, setIsExpandingAll] = useState(false);
+
+  const handleExpandAllClick = async () => {
+    if (!onExpandAllCoverage) return;
+    setIsExpandingAll(true);
+    try {
+      const result = await onExpandAllCoverage();
+      const countText = typeof result === 'number' && result > 0 ? ` (${result} yeni test senaryosu eklendi)` : '';
+      setToastMsg(`✓ Tüm gereksinimler için ISTQB test tiplerinden senaryolar başarıyla üretildi!${countText}`);
+      setTimeout(() => setToastMsg(null), 8000);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsExpandingAll(false);
+    }
+  };
 
   const handleCompleteClick = async (req: RequirementItem) => {
     try {
@@ -108,18 +128,40 @@ export const CoverageReportView: React.FC<CoverageReportViewProps> = ({
             </p>
           </div>
 
-          {/* Key Formula Card */}
-          <div className="bg-[#0A0C10] border border-white/10 p-4 rounded-xl flex flex-col justify-between min-w-[280px]">
-            <div className="text-[11px] font-mono text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
-              <span>Hesaplama Formülü</span>
-              <HelpCircle className="w-3.5 h-3.5 text-blue-400" title="Kapsama Oranı Formülü" />
-            </div>
-            <div className="font-mono text-xs bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 text-blue-300">
-              Kapsama % = (Test Edilen Req / Toplam Req) × 100
-            </div>
-            <div className="mt-2 flex items-center justify-between text-xs">
-              <span className="text-slate-400">Toplam Kapsama Score:</span>
-              <span className="font-extrabold text-emerald-400 text-sm">%{stats.coverageScore}</span>
+          {/* Action Card & Formula */}
+          <div className="flex flex-col sm:flex-row lg:flex-col gap-3 min-w-[280px]">
+            {onExpandAllCoverage && (
+              <button
+                onClick={handleExpandAllClick}
+                disabled={isExpandingAll || isRefining}
+                className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-xl shadow-blue-900/30 border border-blue-400/30 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                {isExpandingAll ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                    <span>Tüm Kapsam Genişletiliyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                    <span>Kapsamı Genişlet: Tüm ISTQB Tiplerinden Ekle</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            <div className="bg-[#0A0C10] border border-white/10 p-4 rounded-xl flex flex-col justify-between flex-1">
+              <div className="text-[11px] font-mono text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>Hesaplama Formülü</span>
+                <HelpCircle className="w-3.5 h-3.5 text-blue-400" title="Kapsama Oranı Formülü" />
+              </div>
+              <div className="font-mono text-xs bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 text-blue-300">
+                Kapsama % = (Test Edilen Req / Toplam Req) × 100
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <span className="text-slate-400">Toplam Kapsama Score:</span>
+                <span className="font-extrabold text-emerald-400 text-sm">%{stats.coverageScore}</span>
+              </div>
             </div>
           </div>
         </div>

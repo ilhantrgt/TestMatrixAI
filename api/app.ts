@@ -49,6 +49,33 @@ app.post('/api/generate-test-cases', async (req, res) => {
 
     const ai = getGenAIClient();
 
+    const selectedFunctional = Array.isArray(config.selectedFunctionalTypes)
+      ? config.selectedFunctionalTypes
+      : [];
+    const selectedNonFunctional = Array.isArray(config.selectedNonFunctionalTypes)
+      ? config.selectedNonFunctionalTypes
+      : [];
+    const allSelectedTypes = [...selectedFunctional, ...selectedNonFunctional];
+
+    let testTypesDirective = '';
+    if (allSelectedTypes.length > 0) {
+      testTypesDirective = `
+CRITICAL STRICTION - USER-SELECTED TEST TYPES:
+The user explicitly selected ONLY the following ISTQB Test Types / Techniques to generate:
+${allSelectedTypes.map((t: string) => `- "${t}"`).join('\n')}
+
+STRICT MANDATE:
+- You MUST ONLY generate test cases that belong to one of the user-selected test types listed above!
+- ABSOLUTELY DO NOT generate test cases for any test types or techniques that are NOT in this list.
+- Example: If ONLY "Pozitif (Fonksiyonel Doğruluk)" is selected, you MUST generate ONLY positive happy-path test cases. Do NOT produce negative, boundary value (BVA), or security test cases under any circumstances.
+- Ensure every test case's "testType" property is strictly set to one of the selected test types above.
+`;
+    } else {
+      testTypesDirective = `
+Generate standard ISTQB test cases covering functional (positive, negative, boundary) and requested non-functional categories.
+`;
+    }
+
     const columnNamesList = Array.isArray(templateColumns)
       ? templateColumns.map((c: any) => `${c.name} (${c.mappedField})`).join(', ')
       : 'Standard ISTQB Columns';
@@ -58,28 +85,16 @@ Your goal is to carefully analyze the provided Software Requirements Specificati
 
 The output MUST be in ${config.language === 'en' ? 'English' : 'Turkish'}.
 
+${testTypesDirective}
+
 Follow these ISTQB CTFL QA Best Practices:
 1. Break down the requirement document into individual Requirement Items with ID, Title, and Description.
-2. For EACH Requirement Item, generate test cases spanning appropriate ISTQB test categories:
-   - Functional Testing:
-     * Pozitif (Fonksiyonel Doğruluk) - Happy path verification
-     * Negatif (Hata Yönetimi) - Validation errors, invalid inputs, edge failures
-     * Sınır Değer Analizi (BVA) & Eşdeğer Sınıflandırma (EP)
-     * Durum Geçiş Testi (State Transition) / Karar Tablosu (Decision Table) / Kullanım Senaryosu (Use Case)
-   - Non-Functional Testing:
-     ${config.includeSecurity ? '* Güvenlik ve Yetki Testi (Security, Auth, RBAC, Injection, Session)' : ''}
-     ${config.includePerformance ? '* Performans Testi (Performance, Load, Latency, Timeouts)' : ''}
-     ${config.includeUsability ? '* Kullanılabilirlik Testi (Usability / UX)' : ''}
-     ${config.includeCompatibility ? '* Uyumluluk ve Çapraz Platform (Compatibility)' : ''}
-   - Change-Related & Acceptance:
-     ${config.includeUAT ? '* Kullanıcı Kabul Testi (UAT)' : ''}
-     ${config.includeRegression ? '* Regresyon Testi (Regression)' : ''}
+2. For EACH Requirement Item, generate test cases following the STRICT TEST TYPES selection above.
 3. Test steps must be numbered, clear, step-by-step instructions.
 4. Provide concrete, realistic Test Data (e.g. sample credit cards, IBANs, boundary numbers).
 5. Provide unambiguous, clear Expected Results.
 6. Categorize Priority as Yüksek/Orta/Düşük (or High/Medium/Low) and Severity as Kritik/Yüksek/Normal/Düşük.
-7. Categorize Test Type precisely using standard ISTQB types:
-   "Pozitif (Fonksiyonel Doğruluk)", "Negatif (Hata Yönetimi)", "Sınır Değer Analizi (BVA)", "Eşdeğer Sınıflandırma (EP)", "Durum Geçiş Testi (State Transition)", "Karar Tablosu Testi (Decision Table)", "Kullanım Senaryosu Testi (Use Case)", "Performans Testi (Performance)", "Yük ve Stres Testi (Load & Stress)", "Güvenlik ve Yetki Testi (Security)", "Kullanılabilirlik Testi (Usability / UX)", "Uyumluluk ve Çapraz Platform (Compatibility)", "Erişilebilirlik Testi (Accessibility / WCAG)", "Regresyon Testi (Regression)", "Kullanıcı Kabul Testi (UAT)", "Sistem Entegrasyon Testi (SIT)".
+7. Categorize Test Type accurately. Allowed selected types: ${allSelectedTypes.length > 0 ? allSelectedTypes.join(', ') : 'All ISTQB Types'}.
 
 Target Export Column Mapping structure: ${columnNamesList}
 ${config.customInstructions ? `Additional User Testing Guidelines: ${config.customInstructions}` : ''}
