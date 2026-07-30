@@ -248,23 +248,71 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     setIsGoogleModalOpen(true);
   };
 
-  const handleConfirmGoogleLogin = (selectedEmail?: string, selectedName?: string) => {
-    const finalEmail = selectedEmail || googleEmailInput || 'test.engineer@gmail.com';
-    const finalName = selectedName || googleNameInput || 'Google Kullanıcısı';
+  const handleConfirmGoogleLogin = async (selectedEmail?: string, selectedName?: string) => {
+    const finalEmail = (selectedEmail || googleEmailInput || 'ilhantrgt@gmail.com').trim().toLowerCase();
 
-    const googleUser: UserProfile = {
-      id: 'goog_' + Date.now(),
-      name: finalName,
-      email: finalEmail.toLowerCase(),
-      role: 'QA Lead (Google Auth)',
-      avatarUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(finalName)}`,
-      provider: 'google',
-      createdAt: new Date().toISOString(),
-    };
+    let finalName = (selectedName || googleNameInput || '').trim();
+    if (!finalName || finalName === 'Google Kullanıcısı') {
+      const localPart = finalEmail.split('@')[0];
+      finalName = localPart
+        .split(/[._-]/)
+        .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+        .join(' ');
+    }
 
-    saveRegisteredUser(googleUser);
-    setIsGoogleModalOpen(false);
-    onLoginSuccess(googleUser);
+    setIsSubmitting(true);
+    try {
+      // Look for existing account with same email in local storage or Firestore
+      const registeredUsers = getRegisteredUsers();
+      let existingUser = registeredUsers.find(
+        (u) => u.email.toLowerCase() === finalEmail
+      );
+
+      if (!existingUser) {
+        const cloudUser = await findUserInCloudByEmail(finalEmail);
+        if (cloudUser) existingUser = cloudUser;
+      }
+
+      let googleUser: UserProfile;
+
+      if (existingUser) {
+        googleUser = {
+          ...existingUser,
+          name: existingUser.name && existingUser.name !== 'Google Kullanıcısı' ? existingUser.name : finalName,
+          provider: 'google',
+        };
+      } else {
+        googleUser = {
+          id: 'usr_g_' + finalEmail.replace(/[^a-z0-9]/g, '_'),
+          name: finalName,
+          email: finalEmail,
+          role: 'Software QA Engineer',
+          avatarUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(finalName)}`,
+          provider: 'google',
+          createdAt: new Date().toISOString(),
+        };
+      }
+
+      saveRegisteredUser(googleUser);
+      setIsGoogleModalOpen(false);
+      onLoginSuccess(googleUser);
+    } catch (err) {
+      console.error('Google login error:', err);
+      // Fallback
+      const fallbackUser: UserProfile = {
+        id: 'usr_g_' + finalEmail.replace(/[^a-z0-9]/g, '_'),
+        name: finalName,
+        email: finalEmail,
+        role: 'Software QA Engineer',
+        provider: 'google',
+        createdAt: new Date().toISOString(),
+      };
+      saveRegisteredUser(fallbackUser);
+      setIsGoogleModalOpen(false);
+      onLoginSuccess(fallbackUser);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Quick Demo Login

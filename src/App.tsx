@@ -43,6 +43,16 @@ import {
   Trash2,
 } from 'lucide-react';
 
+const DEFAULT_TEST_RUNS: TestRun[] = [
+  {
+    id: 'RUN-1',
+    name: 'Sprint 24 Regresyon Test Koşumu',
+    environment: 'Staging Env-1',
+    createdAt: new Date().toISOString().slice(0, 10),
+    executions: {},
+  },
+];
+
 export default function App() {
   // Authentication State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
@@ -54,6 +64,8 @@ export default function App() {
     }
   });
 
+  const [isCloudSyncReady, setIsCloudSyncReady] = useState<boolean>(false);
+
   const handleLoginSuccess = (user: UserProfile) => {
     setCurrentUser(user);
     localStorage.setItem('tm_user_session', JSON.stringify(user));
@@ -62,6 +74,13 @@ export default function App() {
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem('tm_user_session');
+    setIsCloudSyncReady(false);
+    setRequirements([]);
+    setTestCases([]);
+    setGenerationStats(null);
+    setRecommendations([]);
+    setTestRuns(DEFAULT_TEST_RUNS);
+    setRequirementText(SAMPLE_REQUIREMENT_DOCS[0].content);
   };
 
   // State
@@ -121,133 +140,89 @@ export default function App() {
   const [isRefiningReqId, setIsRefiningReqId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Result & Execution States (Persisted in localStorage)
-  const [requirements, setRequirements] = useState<RequirementItem[]>(() => {
-    const saved = localStorage.getItem('tm_requirements');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [];
-  });
-
-  const [testCases, setTestCases] = useState<TestCase[]>(() => {
-    const saved = localStorage.getItem('tm_test_cases');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [];
-  });
-
-  const [generationStats, setGenerationStats] = useState<any | null>(() => {
-    const saved = localStorage.getItem('tm_generation_stats');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return null;
-  });
-
+  // User-scoped workspace state
+  const [requirements, setRequirements] = useState<RequirementItem[]>([]);
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [generationStats, setGenerationStats] = useState<any | null>(null);
   const [recommendations, setRecommendations] = useState<string[]>([]);
+  const [testRuns, setTestRuns] = useState<TestRun[]>(DEFAULT_TEST_RUNS);
+  const [activeRunId, setActiveRunId] = useState<string>('RUN-1');
 
-  const [testRuns, setTestRuns] = useState<TestRun[]>(() => {
-    const saved = localStorage.getItem('tm_test_runs');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error(e);
-      }
+  // Load & Realtime Sync with Firebase Firestore Cloud DB (Strictly scoped by User ID)
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setIsCloudSyncReady(false);
+      setRequirements([]);
+      setTestCases([]);
+      setGenerationStats(null);
+      setRecommendations([]);
+      setTestRuns(DEFAULT_TEST_RUNS);
+      setRequirementText(SAMPLE_REQUIREMENT_DOCS[0].content);
+      return;
     }
-    return [
-      {
-        id: 'RUN-1',
-        name: 'Sprint 24 Regresyon Test Koşumu',
-        environment: 'Staging Env-1',
-        createdAt: new Date().toISOString().slice(0, 10),
-        executions: {},
-      },
-    ];
-  });
-
-  const [activeRunId, setActiveRunId] = useState<string>(() => {
-    const saved = localStorage.getItem('tm_active_run_id');
-    return saved || 'RUN-1';
-  });
-
-  // Sync states to localStorage
-  useEffect(() => {
-    localStorage.setItem('tm_requirements', JSON.stringify(requirements));
-  }, [requirements]);
-
-  useEffect(() => {
-    localStorage.setItem('tm_test_cases', JSON.stringify(testCases));
-  }, [testCases]);
-
-  useEffect(() => {
-    if (generationStats) {
-      localStorage.setItem('tm_generation_stats', JSON.stringify(generationStats));
-    } else {
-      localStorage.removeItem('tm_generation_stats');
-    }
-  }, [generationStats]);
-
-  useEffect(() => {
-    localStorage.setItem('tm_test_runs', JSON.stringify(testRuns));
-  }, [testRuns]);
-
-  useEffect(() => {
-    localStorage.setItem('tm_active_run_id', activeRunId);
-  }, [activeRunId]);
-
-  // Load & Realtime Sync with Firebase Firestore Cloud DB
-  useEffect(() => {
-    if (!currentUser?.id) return;
 
     let isMounted = true;
+    setIsCloudSyncReady(false);
 
-    // Load initial data from Firebase Firestore
-    loadUserDataFromCloud(currentUser.id).then((cloudData) => {
-      if (!isMounted || !cloudData) return;
-      if (cloudData.requirements && cloudData.requirements.length > 0) {
-        setRequirements(cloudData.requirements);
+    // 1. First load from user-scoped localStorage cache for fast startup
+    const userCacheKey = `tm_workspace_${currentUser.id}`;
+    const cachedLocal = localStorage.getItem(userCacheKey);
+    if (cachedLocal) {
+      try {
+        const parsed = JSON.parse(cachedLocal);
+        setRequirements(parsed.requirements || []);
+        setTestCases(parsed.testCases || []);
+        setTestRuns(parsed.testRuns || DEFAULT_TEST_RUNS);
+        setGenerationStats(parsed.generationStats || null);
+        setRecommendations(parsed.recommendations || []);
+        if (parsed.requirementText) setRequirementText(parsed.requirementText);
+      } catch {
+        // ignore
       }
-      if (cloudData.testCases && cloudData.testCases.length > 0) {
-        setTestCases(cloudData.testCases);
-      }
-      if (cloudData.testRuns && cloudData.testRuns.length > 0) {
-        setTestRuns(cloudData.testRuns);
-      }
-      if (cloudData.generationStats) {
-        setGenerationStats(cloudData.generationStats);
-      }
-      if (cloudData.recommendations) {
-        setRecommendations(cloudData.recommendations);
-      }
-      if (cloudData.requirementText) {
-        setRequirementText(cloudData.requirementText);
-      }
-    });
+    } else {
+      // Reset to empty workspace for a new user
+      setRequirements([]);
+      setTestCases([]);
+      setGenerationStats(null);
+      setRecommendations([]);
+      setTestRuns(DEFAULT_TEST_RUNS);
+      setRequirementText(SAMPLE_REQUIREMENT_DOCS[0].content);
+    }
 
-    // Subscribe to real-time changes
+    // 2. Load authoritative cloud data from Firebase Firestore
+    loadUserDataFromCloud(currentUser.id)
+      .then((cloudData) => {
+        if (!isMounted) return;
+        if (cloudData) {
+          setRequirements(cloudData.requirements || []);
+          setTestCases(cloudData.testCases || []);
+          setTestRuns(
+            cloudData.testRuns && cloudData.testRuns.length > 0
+              ? cloudData.testRuns
+              : DEFAULT_TEST_RUNS
+          );
+          setGenerationStats(cloudData.generationStats || null);
+          setRecommendations(cloudData.recommendations || []);
+          if (cloudData.requirementText) {
+            setRequirementText(cloudData.requirementText);
+          }
+        }
+        setIsCloudSyncReady(true);
+      })
+      .catch((err) => {
+        console.warn('Error loading user cloud data:', err);
+        if (isMounted) setIsCloudSyncReady(true);
+      });
+
+    // 3. Realtime listener for user workspace changes
     const unsubscribe = subscribeToUserData(currentUser.id, (updatedData) => {
       if (!isMounted) return;
-      if (updatedData.requirements) setRequirements(updatedData.requirements);
-      if (updatedData.testCases) setTestCases(updatedData.testCases);
-      if (updatedData.testRuns) setTestRuns(updatedData.testRuns);
-      if (updatedData.generationStats) setGenerationStats(updatedData.generationStats);
-      if (updatedData.recommendations) setRecommendations(updatedData.recommendations);
-      if (updatedData.requirementText) setRequirementText(updatedData.requirementText);
+      if (updatedData.requirements !== undefined) setRequirements(updatedData.requirements);
+      if (updatedData.testCases !== undefined) setTestCases(updatedData.testCases);
+      if (updatedData.testRuns !== undefined) setTestRuns(updatedData.testRuns);
+      if (updatedData.generationStats !== undefined) setGenerationStats(updatedData.generationStats);
+      if (updatedData.recommendations !== undefined) setRecommendations(updatedData.recommendations);
+      if (updatedData.requirementText !== undefined) setRequirementText(updatedData.requirementText);
     });
 
     return () => {
@@ -256,24 +231,31 @@ export default function App() {
     };
   }, [currentUser?.id]);
 
-  // Push user workspace updates to Firebase Cloud DB
+  // Push user workspace updates to Firebase Cloud DB and user-scoped localStorage
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || !isCloudSyncReady) return;
 
+    const payload = {
+      requirementText,
+      requirements,
+      testCases,
+      testRuns,
+      generationStats,
+      recommendations,
+    };
+
+    // Save to user-scoped localStorage
+    localStorage.setItem(`tm_workspace_${currentUser.id}`, JSON.stringify(payload));
+
+    // Debounced save to Firebase Firestore
     const timer = setTimeout(() => {
-      saveUserDataToCloud(currentUser.id, {
-        requirementText,
-        requirements,
-        testCases,
-        testRuns,
-        generationStats,
-        recommendations,
-      });
+      saveUserDataToCloud(currentUser.id, payload);
     }, 800);
 
     return () => clearTimeout(timer);
   }, [
     currentUser?.id,
+    isCloudSyncReady,
     requirementText,
     requirements,
     testCases,

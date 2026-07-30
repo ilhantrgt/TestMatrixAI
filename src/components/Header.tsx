@@ -86,31 +86,35 @@ export const Header: React.FC<HeaderProps> = ({
           {/* User Profile Badge */}
           {currentUser && (
             <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 pl-2 pr-1.5 py-1 rounded-xl">
-              <div className="w-7 h-7 rounded-lg bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 flex items-center justify-center font-bold text-xs">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 flex items-center justify-center font-bold text-xs shrink-0">
                 {currentUser.avatarUrl ? (
                   <img src={currentUser.avatarUrl} alt={currentUser.name} className="w-7 h-7 rounded-lg" />
                 ) : (
-                  currentUser.name.charAt(0).toUpperCase()
+                  (currentUser.name || currentUser.email).charAt(0).toUpperCase()
                 )}
               </div>
               <div className="hidden sm:block text-left text-[11px] leading-tight">
-                <p className="font-semibold text-slate-200 flex items-center gap-1">
-                  <span>{currentUser.name}</span>
+                <p className="font-semibold text-slate-200 flex items-center gap-1.5">
+                  <span className="truncate max-w-[140px]">
+                    {currentUser.name && currentUser.name !== 'Google Kullanıcısı'
+                      ? currentUser.name
+                      : currentUser.email}
+                  </span>
                   {currentUser.provider === 'google' && (
-                    <span className="bg-emerald-500/20 text-emerald-300 text-[9px] px-1 rounded font-mono">
+                    <span className="bg-emerald-500/20 text-emerald-300 text-[9px] px-1 rounded font-mono shrink-0">
                       Google
                     </span>
                   )}
                 </p>
-                <p className="text-slate-400 text-[10px] truncate max-w-[110px]">
-                  {currentUser.role || currentUser.email}
+                <p className="text-slate-400 text-[10px] truncate max-w-[150px]" title={currentUser.email}>
+                  {currentUser.email}
                 </p>
               </div>
 
               {onLogout && (
                 <button
                   onClick={onLogout}
-                  className="p-1.5 text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg transition-colors ml-1"
+                  className="p-1.5 text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg transition-colors ml-1 shrink-0"
                   title={language === 'tr' ? 'Oturumu Kapat' : 'Sign Out'}
                 >
                   <LogOut className="w-3.5 h-3.5" />
