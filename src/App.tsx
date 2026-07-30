@@ -11,6 +11,12 @@ import { JiraModal } from './components/JiraModal';
 import { AddTestCaseModal } from './components/AddTestCaseModal';
 import { PRESET_TEMPLATES } from './data/presetTemplates';
 import { SAMPLE_REQUIREMENT_DOCS } from './data/sampleRequirements';
+import { AuthScreen } from './components/AuthScreen';
+import {
+  loadUserDataFromCloud,
+  saveUserDataToCloud,
+  subscribeToUserData,
+} from './firebase';
 import {
   ExcelTemplateConfig,
   GenerationConfig,
@@ -19,9 +25,10 @@ import {
   TestCase,
   JiraConfig,
   TestRun,
+  UserProfile,
 } from './types';
 import { exportTestCasesToExcel } from './utils/excelHelper';
-import { generateNextTestCaseId } from './utils/idGenerator';
+import { generateNextTestCaseId, sortTestCasesById } from './utils/idGenerator';
 import {
   FileSpreadsheet,
   Layers,
@@ -33,9 +40,30 @@ import {
   Sparkles,
   PieChart,
   Play,
+  Trash2,
 } from 'lucide-react';
 
 export default function App() {
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('tm_user_session');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const handleLoginSuccess = (user: UserProfile) => {
+    setCurrentUser(user);
+    localStorage.setItem('tm_user_session', JSON.stringify(user));
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('tm_user_session');
+  };
+
   // State
   const [requirementText, setRequirementText] = useState<string>(
     SAMPLE_REQUIREMENT_DOCS[0].content
@@ -182,6 +210,78 @@ export default function App() {
     localStorage.setItem('tm_active_run_id', activeRunId);
   }, [activeRunId]);
 
+  // Load & Realtime Sync with Firebase Firestore Cloud DB
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    let isMounted = true;
+
+    // Load initial data from Firebase Firestore
+    loadUserDataFromCloud(currentUser.id).then((cloudData) => {
+      if (!isMounted || !cloudData) return;
+      if (cloudData.requirements && cloudData.requirements.length > 0) {
+        setRequirements(cloudData.requirements);
+      }
+      if (cloudData.testCases && cloudData.testCases.length > 0) {
+        setTestCases(cloudData.testCases);
+      }
+      if (cloudData.testRuns && cloudData.testRuns.length > 0) {
+        setTestRuns(cloudData.testRuns);
+      }
+      if (cloudData.generationStats) {
+        setGenerationStats(cloudData.generationStats);
+      }
+      if (cloudData.recommendations) {
+        setRecommendations(cloudData.recommendations);
+      }
+      if (cloudData.requirementText) {
+        setRequirementText(cloudData.requirementText);
+      }
+    });
+
+    // Subscribe to real-time changes
+    const unsubscribe = subscribeToUserData(currentUser.id, (updatedData) => {
+      if (!isMounted) return;
+      if (updatedData.requirements) setRequirements(updatedData.requirements);
+      if (updatedData.testCases) setTestCases(updatedData.testCases);
+      if (updatedData.testRuns) setTestRuns(updatedData.testRuns);
+      if (updatedData.generationStats) setGenerationStats(updatedData.generationStats);
+      if (updatedData.recommendations) setRecommendations(updatedData.recommendations);
+      if (updatedData.requirementText) setRequirementText(updatedData.requirementText);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [currentUser?.id]);
+
+  // Push user workspace updates to Firebase Cloud DB
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const timer = setTimeout(() => {
+      saveUserDataToCloud(currentUser.id, {
+        requirementText,
+        requirements,
+        testCases,
+        testRuns,
+        generationStats,
+        recommendations,
+      });
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [
+    currentUser?.id,
+    requirementText,
+    requirements,
+    testCases,
+    testRuns,
+    generationStats,
+    recommendations,
+  ]);
+
   const [activeTab, setActiveTab] = useState<'matrix' | 'execution' | 'coverage' | 'rtm' | 'stats'>('matrix');
 
   // Trigger AI Test Case Generation
@@ -210,7 +310,7 @@ export default function App() {
 
       const data: GenerationResult = await response.json();
       setRequirements(data.requirements || []);
-      setTestCases(data.testCases || []);
+      setTestCases(sortTestCasesById(data.testCases || []));
       setGenerationStats(data.stats);
       setRecommendations(data.recommendations || []);
       setActiveTab('matrix');
@@ -262,7 +362,7 @@ export default function App() {
               newCasesWithSequentialIds.push(formattedTc);
               currentList.push(formattedTc);
             }
-            return currentList;
+            return sortTestCasesById(currentList);
           });
           setRequirements((prevReqs) =>
             prevReqs.map((r) =>
@@ -293,7 +393,7 @@ export default function App() {
 
   // CRUD Operations on Test Cases
   const handleUpdateTestCase = (updatedTc: TestCase) => {
-    setTestCases((prev) => prev.map((tc) => (tc.id === updatedTc.id ? updatedTc : tc)));
+    setTestCases((prev) => sortTestCasesById(prev.map((tc) => (tc.id === updatedTc.id ? updatedTc : tc))));
   };
 
   const handleDeleteTestCase = (tcId: string) => {
@@ -301,7 +401,7 @@ export default function App() {
   };
 
   const handleAddTestCase = (newTc: TestCase) => {
-    setTestCases((prev) => [newTc, ...prev]);
+    setTestCases((prev) => sortTestCasesById([...prev, newTc]));
   };
 
   // Direct Excel Export
@@ -315,30 +415,54 @@ export default function App() {
     );
   };
 
+  // Reset Confirmation State
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+
   const handleReset = () => {
-    if (confirm('Tüm üretilmiş test case ve test koşum verilerini temizlemek istediğinize emin misiniz?')) {
-      setTestCases([]);
-      setRequirements([]);
-      setGenerationStats(null);
-      setRecommendations([]);
-      const defaultRuns: TestRun[] = [
-        {
-          id: 'RUN-1',
-          name: 'Sprint 24 Regresyon Test Koşumu',
-          environment: 'Staging Env-1',
-          createdAt: new Date().toISOString().slice(0, 10),
-          executions: {},
-        },
-      ];
-      setTestRuns(defaultRuns);
-      setActiveRunId('RUN-1');
-      localStorage.removeItem('tm_requirements');
-      localStorage.removeItem('tm_test_cases');
-      localStorage.removeItem('tm_generation_stats');
-      localStorage.removeItem('tm_test_runs');
-      localStorage.removeItem('tm_active_run_id');
-    }
+    setIsResetModalOpen(true);
   };
+
+  const executeReset = () => {
+    const isEn = generationConfig.language === 'en';
+    setRequirementText('');
+    setTestCases([]);
+    setRequirements([]);
+    setGenerationStats(null);
+    setRecommendations([]);
+    const defaultRuns: TestRun[] = [
+      {
+        id: 'RUN-1',
+        name: isEn ? 'Sprint 24 Regression Test Run' : 'Sprint 24 Regresyon Test Koşumu',
+        environment: 'Staging Env-1',
+        createdAt: new Date().toISOString().slice(0, 10),
+        executions: {},
+      },
+    ];
+    setTestRuns(defaultRuns);
+    setActiveRunId('RUN-1');
+    localStorage.removeItem('tm_requirements');
+    localStorage.removeItem('tm_test_cases');
+    localStorage.removeItem('tm_generation_stats');
+    localStorage.removeItem('tm_test_runs');
+    localStorage.removeItem('tm_active_run_id');
+    setIsResetModalOpen(false);
+  };
+
+
+  if (!currentUser) {
+    return (
+      <AuthScreen
+        onLoginSuccess={handleLoginSuccess}
+        language={generationConfig.language}
+        onToggleLanguage={() =>
+          setGenerationConfig({
+            ...generationConfig,
+            language: generationConfig.language === 'tr' ? 'en' : 'tr',
+          })
+        }
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0A0C10] text-slate-100 flex flex-col font-sans antialiased selection:bg-blue-600 selection:text-white">
@@ -357,6 +481,8 @@ export default function App() {
             language: generationConfig.language === 'tr' ? 'en' : 'tr',
           })
         }
+        currentUser={currentUser}
+        onLogout={handleLogout}
       />
 
       {/* Main Container */}
@@ -471,6 +597,7 @@ export default function App() {
                 isRefiningReqId={isRefiningReqId}
                 onExportExcel={handleExportExcel}
                 onOpenAddModal={handleOpenAddModal}
+                language={generationConfig.language}
               />
             )}
 
@@ -484,6 +611,7 @@ export default function App() {
                 setTestRuns={setTestRuns}
                 activeRunId={activeRunId}
                 setActiveRunId={setActiveRunId}
+                language={generationConfig.language}
               />
             )}
 
@@ -506,6 +634,7 @@ export default function App() {
                 onAutoGenerateMissing={handleAutoGenerateMissingForReq}
                 isRefining={Boolean(isRefiningReqId)}
                 isRefiningReqId={isRefiningReqId}
+                language={generationConfig.language}
               />
             )}
 
@@ -513,11 +642,16 @@ export default function App() {
               <TraceabilityMatrixView
                 requirements={requirements}
                 testCases={testCases}
+                language={generationConfig.language}
               />
             )}
 
             {activeTab === 'stats' && generationStats && (
-              <StatsSummaryPanel stats={generationStats} recommendations={recommendations} />
+              <StatsSummaryPanel
+                stats={generationStats}
+                recommendations={recommendations}
+                language={generationConfig.language}
+              />
             )}
           </div>
         )}
@@ -528,12 +662,51 @@ export default function App() {
         <p>TestMatrix AI — Software Test Engineering & Requirement Specification Suite</p>
       </footer>
 
+      {/* Reset Confirmation Modal */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3 text-rose-400">
+              <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-white">
+                  {generationConfig.language === 'en' ? 'Clear All Data?' : 'Tüm Verileri Temizle?'}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {generationConfig.language === 'en'
+                    ? 'This action will clear requirement text, generated test cases, and test run records.'
+                    : 'Gereksinim metnini, üretilen tüm test senaryolarını ve test koşum verilerini tamamen temizlemek istediğinize emin misiniz?'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setIsResetModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                {generationConfig.language === 'en' ? 'Cancel' : 'İptal'}
+              </button>
+              <button
+                onClick={executeReset}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-lg shadow-md shadow-rose-900/40 transition-colors"
+              >
+                {generationConfig.language === 'en' ? 'Yes, Clear All' : 'Evet, Hepsini Temizle'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Template Customizer Modal */}
       <TemplateConfiguratorModal
         isOpen={isTemplateModalOpen}
         onClose={() => setIsTemplateModalOpen(false)}
         activeTemplate={activeTemplate}
         onSaveTemplate={(updated) => setActiveTemplate(updated)}
+        language={generationConfig.language}
       />
 
       {/* Jira Integration Config Modal */}
@@ -542,6 +715,7 @@ export default function App() {
         onClose={() => setIsJiraModalOpen(false)}
         jiraConfig={jiraConfig}
         onSaveConfig={handleSaveJiraConfig}
+        language={generationConfig.language}
       />
 
       {/* Manual Test Case Add Modal */}
@@ -552,7 +726,9 @@ export default function App() {
         testCases={testCases}
         defaultReqId={selectedReqForAddModal}
         onAddTestCase={handleAddTestCase}
+        language={generationConfig.language}
       />
+
     </div>
   );
 }

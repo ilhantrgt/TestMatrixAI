@@ -1,3 +1,14 @@
+export interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+  password?: string;
+  role?: string;
+  avatarUrl?: string;
+  provider: 'email' | 'google';
+  createdAt: string;
+}
+
 export type MappedFieldType =
   | 'testCaseId'
   | 'reqId'

@@ -1,5 +1,6 @@
 import React from 'react';
-import { FileSpreadsheet, Sparkles, ShieldCheck, Download, RefreshCw, FileText } from 'lucide-react';
+import { FileSpreadsheet, Sparkles, Download, RefreshCw, Globe, LogOut, User, Cloud, CloudCheck } from 'lucide-react';
+import { UserProfile } from '../types';
 
 interface HeaderProps {
   templateName: string;
@@ -10,6 +11,9 @@ interface HeaderProps {
   hasTestCases: boolean;
   language: 'tr' | 'en';
   onToggleLanguage: () => void;
+  currentUser?: UserProfile | null;
+  onLogout?: () => void;
+  isCloudSynced?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,6 +25,9 @@ export const Header: React.FC<HeaderProps> = ({
   hasTestCases,
   language,
   onToggleLanguage,
+  currentUser,
+  onLogout,
+  isCloudSynced = true,
 }) => {
   return (
     <header className="bg-[#0D1117] border-b border-white/10 text-white sticky top-0 z-40 shadow-md">
@@ -38,7 +45,9 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400 hidden sm:block">
-              Gereksinim Dökümanından Otomatik Test Case & RTM Jeneratörü
+              {language === 'tr'
+                ? 'Gereksinim Dökümanından Otomatik Test Case & RTM Jeneratörü'
+                : 'Automated Test Case & RTM Generator from SRS / PRD'}
             </p>
           </div>
         </div>
@@ -46,16 +55,70 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Center / Template Indicator */}
         <button
           onClick={onOpenTemplateModal}
-          className="hidden md:flex items-center gap-2 bg-[#0A0C10] hover:bg-slate-800 text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 text-xs transition-colors"
-          title="Şablon Sütun Yapısını Değiştir / Excel Yükle"
+          className="hidden lg:flex items-center gap-2 bg-[#0A0C10] hover:bg-slate-800 text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 text-xs transition-colors"
+          title={language === 'tr' ? 'Şablon Sütun Yapısını Değiştir / Excel Yükle' : 'Configure Export Excel Template'}
         >
           <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-          <span>Şablon: <strong className="text-emerald-300">{templateName}</strong></span>
-          <span className="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded text-[10px] uppercase font-mono">Düzenle</span>
+          <span>{language === 'tr' ? 'Şablon:' : 'Template:'} <strong className="text-emerald-300">{templateName}</strong></span>
+          <span className="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded text-[10px] uppercase font-mono">
+            {language === 'tr' ? 'Düzenle' : 'Edit'}
+          </span>
         </button>
 
         {/* Action Controls */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Cloud Database Sync Status */}
+          <div
+            className="hidden sm:flex items-center gap-1.5 bg-slate-900/90 text-slate-300 border border-slate-800 px-2.5 py-1 rounded-xl text-[11px] font-medium"
+            title={
+              language === 'tr'
+                ? 'Firebase Firestore Bulut Veri Tabanı Aktif ve Senkronize'
+                : 'Firebase Firestore Cloud DB Synced'
+            }
+          >
+            <CloudCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-emerald-300 font-semibold hidden md:inline">
+              {language === 'tr' ? 'Firebase Bulut' : 'Firebase Cloud'}
+            </span>
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          </div>
+
+          {/* User Profile Badge */}
+          {currentUser && (
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 pl-2 pr-1.5 py-1 rounded-xl">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 flex items-center justify-center font-bold text-xs">
+                {currentUser.avatarUrl ? (
+                  <img src={currentUser.avatarUrl} alt={currentUser.name} className="w-7 h-7 rounded-lg" />
+                ) : (
+                  currentUser.name.charAt(0).toUpperCase()
+                )}
+              </div>
+              <div className="hidden sm:block text-left text-[11px] leading-tight">
+                <p className="font-semibold text-slate-200 flex items-center gap-1">
+                  <span>{currentUser.name}</span>
+                  {currentUser.provider === 'google' && (
+                    <span className="bg-emerald-500/20 text-emerald-300 text-[9px] px-1 rounded font-mono">
+                      Google
+                    </span>
+                  )}
+                </p>
+                <p className="text-slate-400 text-[10px] truncate max-w-[110px]">
+                  {currentUser.role || currentUser.email}
+                </p>
+              </div>
+
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  className="p-1.5 text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg transition-colors ml-1"
+                  title={language === 'tr' ? 'Oturumu Kapat' : 'Sign Out'}
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Jira Integration Button */}
           <button
             onClick={onOpenJiraModal}
@@ -65,41 +128,50 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="font-bold font-mono bg-blue-600 text-white w-4 h-4 rounded-full flex items-center justify-center text-[10px]">
               J
             </span>
-            <span className="hidden sm:inline">Jira Entegrasyonu</span>
+            <span className="hidden sm:inline">Jira</span>
           </button>
 
           {/* Language toggle */}
           <button
             onClick={onToggleLanguage}
-            className="text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-[#0A0C10] hover:bg-slate-800 text-slate-300 border border-white/10 transition-colors"
-            title="Dil Değiştir"
+            className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-[#0A0C10] hover:bg-slate-800 text-slate-200 border border-indigo-500/30 hover:border-indigo-400 transition-colors shadow-sm"
+            title={
+              language === 'tr'
+                ? 'Üretim Dili: Türkçe (İngilizce yapmak için tıklayın)'
+                : 'Generation Language: English (Click for Turkish)'
+            }
           >
-            {language === 'tr' ? '🇹🇷 TR' : '🇬🇧 EN'}
+            <Globe className="w-3.5 h-3.5 text-indigo-400" />
+            <span>{language === 'tr' ? '🇹🇷 TR' : '🇬🇧 EN'}</span>
+          </button>
+
+          {/* Temizle (Reset) Button - Always Visible */}
+          <button
+            onClick={onReset}
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-rose-300 px-2.5 py-1.5 rounded-lg hover:bg-rose-950/40 border border-slate-700/60 hover:border-rose-500/40 transition-colors"
+            title={
+              language === 'tr'
+                ? 'Gereksinim metni ve üretilmiş tüm test verilerini temizle'
+                : 'Clear requirement text and reset all data'
+            }
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+            <span className="hidden sm:inline">{language === 'tr' ? 'Temizle' : 'Clear'}</span>
           </button>
 
           {hasTestCases && (
-            <>
-              <button
-                onClick={onReset}
-                className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors"
-                title="Yeni Dökümandan Başla"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Temizle</span>
-              </button>
-
-              <button
-                onClick={onExportExcel}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs sm:text-sm px-3.5 py-1.5 rounded-lg shadow-md shadow-emerald-900/30 transition-all transform active:scale-95"
-              >
-                <Download className="w-4 h-4" />
-                <span>Excel İndir (.xlsx)</span>
-              </button>
-            </>
+            <button
+              onClick={onExportExcel}
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs sm:text-sm px-3.5 py-1.5 rounded-lg shadow-md shadow-emerald-900/30 transition-all transform active:scale-95"
+            >
+              <Download className="w-4 h-4" />
+              <span>{language === 'tr' ? 'Excel İndir (.xlsx)' : 'Export Excel (.xlsx)'}</span>
+            </button>
           )}
         </div>
       </div>
     </header>
   );
 };
+
 

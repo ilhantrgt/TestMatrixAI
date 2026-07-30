@@ -418,43 +418,41 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center justify-end">
+        <div className="flex items-center justify-between pt-1">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+            <span className="text-slate-500">Test Case Üretim Dili:</span>
+            <span className="text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-md font-semibold">
+              {config.language === 'tr' ? '🇹🇷 Türkçe (TR)' : '🇬🇧 English (EN)'}
+            </span>
+          </div>
+
           <button
             onClick={() => setShowAdvanced(!showAdvanced)}
             className="text-xs font-semibold text-slate-400 hover:text-indigo-300 flex items-center gap-1 transition-colors"
           >
             <Settings2 className="w-3.5 h-3.5" />
-            <span>{showAdvanced ? 'Gelişmiş Seçenekleri Gizle' : 'Özel Yönergeler & Şablon'}</span>
+            <span>{showAdvanced ? 'Gelişmiş Yönergeleri Gizle' : 'Özel Yönergeler (Prompt)'}</span>
           </button>
         </div>
 
-        {/* Advanced Area */}
+        {/* Advanced Area - Only Custom AI Guidance */}
         {showAdvanced && (
           <div className="bg-slate-950/60 border border-slate-800 p-4 rounded-xl space-y-3 text-xs animate-in fade-in duration-150">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                <span>Çıktı Excel Şablonu: <strong className="text-emerald-300">{activeTemplateName}</strong></span>
-              </div>
-              <button
-                onClick={onOpenTemplateModal}
-                className="text-xs font-semibold text-indigo-400 hover:underline"
-              >
-                Şablon Sütunlarını Değiştir
-              </button>
-            </div>
-
             <div>
-              <label className="block text-slate-400 mb-1 font-medium">
-                Özel AI Test Talimatı (Prompt Guidance):
+              <label className="block text-slate-300 mb-1.5 font-semibold flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Özel AI Test Talimatı (Prompt Guidance):</span>
               </label>
               <input
                 type="text"
                 value={config.customInstructions || ''}
                 onChange={(e) => onChangeConfig({ ...config, customInstructions: e.target.value })}
                 placeholder="Örn: 'Tüm test adımlarına HTTP 200/400 status kodlarını ekle', 'Luhn algoritması testlerini detaylandır'..."
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
               />
+              <p className="text-[11px] text-slate-500 mt-1">
+                AI modellerinin test senaryolarını üretirken özellikle dikkat etmesini istediğiniz kuralları buraya yazabilirsiniz.
+              </p>
             </div>
           </div>
         )}

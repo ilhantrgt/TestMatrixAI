@@ -10,6 +10,7 @@ interface AddTestCaseModalProps {
   testCases?: TestCase[];
   defaultReqId?: string;
   onAddTestCase: (newTc: TestCase) => void;
+  language?: 'tr' | 'en';
 }
 
 export const AddTestCaseModal: React.FC<AddTestCaseModalProps> = ({
@@ -19,7 +20,9 @@ export const AddTestCaseModal: React.FC<AddTestCaseModalProps> = ({
   testCases = [],
   defaultReqId,
   onAddTestCase,
+  language = 'tr',
 }) => {
+  const isEn = language === 'en';
   const [selectedReqId, setSelectedReqId] = useState<string>('');
   const [tcId, setTcId] = useState<string>('');
   const [moduleName, setModuleName] = useState<string>('');
@@ -41,7 +44,7 @@ export const AddTestCaseModal: React.FC<AddTestCaseModalProps> = ({
       setSelectedReqId(initialReqId);
 
       const targetReq = requirements.find((r) => r.id === initialReqId);
-      const mod = targetReq?.category || targetReq?.title || 'Genel Modül';
+      const mod = targetReq?.category || targetReq?.title || (isEn ? 'General Module' : 'Genel Modül');
       setModuleName(mod);
 
       // Generate next sequential ID for this requirement
@@ -50,16 +53,29 @@ export const AddTestCaseModal: React.FC<AddTestCaseModalProps> = ({
 
       setTitle('');
       setDescription('');
-      setPreconditions('Sistem aktif ve kullanıcı oturum açmış durumda.');
-      setStepsText('1. İlgili sayfaya erişin.\n2. Gerekli verileri girin.\n3. Onay butonuna tıklayın.');
-      setTestData('Örnek test verisi');
-      setExpectedResult('İşlem başarıyla tamamlanmalı ve sistem uygun mesajı göstermelidir.');
+      setPreconditions(
+        isEn
+          ? 'System is active and user is logged in.'
+          : 'Sistem aktif ve kullanıcı oturum açmış durumda.'
+      );
+      setStepsText(
+        isEn
+          ? '1. Access the relevant page.\n2. Input the required parameters.\n3. Click confirm button.'
+          : '1. İlgili sayfaya erişin.\n2. Gerekli verileri girin.\n3. Onay butonuna tıklayın.'
+      );
+      setTestData(isEn ? 'Sample test data' : 'Örnek test verisi');
+      setExpectedResult(
+        isEn
+          ? 'Operation completes successfully with confirmation message.'
+          : 'İşlem başarıyla tamamlanmalı ve sistem uygun mesajı göstermelidir.'
+      );
       setPriority('Orta');
       setTestType('Pozitif');
       setExecutionType('Manuel');
       setSeverity('Normal');
     }
-  }, [isOpen, defaultReqId, requirements, testCases]);
+  }, [isOpen, defaultReqId, requirements, testCases, isEn]);
+
 
   // Update module name and ID when req ID changes
   const handleReqChange = (newReqId: string) => {

@@ -21,7 +21,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { formatStepsText, getValueForMappedField } from '../utils/excelHelper';
-import { generateNextTestCaseId } from '../utils/idGenerator';
+import { generateNextTestCaseId, sortTestCasesById } from '../utils/idGenerator';
 import { EditTestCaseModal } from './EditTestCaseModal';
 
 interface TestCasesMatrixProps {
@@ -35,6 +35,7 @@ interface TestCasesMatrixProps {
   isRefiningReqId?: string | null;
   onExportExcel: () => void;
   onOpenAddModal?: (reqId?: string) => void;
+  language?: 'tr' | 'en';
 }
 
 export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
@@ -48,7 +49,9 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
   isRefiningReqId,
   onExportExcel,
   onOpenAddModal,
+  language = 'tr',
 }) => {
+  const isEn = language === 'en';
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedReqFilter, setSelectedReqFilter] = useState<string>('all');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('all');
@@ -89,13 +92,13 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
     const newTc: TestCase = {
       id: generateNextTestCaseId(targetReq, testCases),
       reqId: targetReq,
-      module: reqObj?.category || 'Genel Modül',
-      title: 'Yeni Test Senaryosu',
-      description: 'Manuel eklenen test senaryosu',
-      preconditions: 'Sistem hazır durumda',
-      steps: ['1. Test adımını gerçekleştir.'],
-      testData: 'Örnek veri',
-      expectedResult: 'Sistem beklenen davranışı sergiler.',
+      module: reqObj?.category || (isEn ? 'General Module' : 'Genel Modül'),
+      title: isEn ? 'New Test Scenario' : 'Yeni Test Senaryosu',
+      description: isEn ? 'Manually added test scenario' : 'Manuel eklenen test senaryosu',
+      preconditions: isEn ? 'System is ready' : 'Sistem hazır durumda',
+      steps: [isEn ? '1. Execute test step.' : '1. Test adımını gerçekleştir.'],
+      testData: isEn ? 'Sample data' : 'Örnek veri',
+      expectedResult: isEn ? 'System behaves as expected.' : 'Sistem beklenen davranışı sergiler.',
       priority: 'Orta',
       testType: 'Pozitif',
       executionType: 'Manuel',
@@ -123,26 +126,33 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
     return true;
   });
 
-  // Grouping logic
+  // Grouping logic with deterministic sorting by Test Case ID
   const groupedData: { groupKey: string; items: TestCase[] }[] = [];
   if (groupBy === 'req') {
     const reqMap = new Map<string, TestCase[]>();
     filteredCases.forEach((tc) => {
-      const key = tc.reqId || 'Diğer';
+      const key = tc.reqId || (isEn ? 'Other' : 'Diğer');
       if (!reqMap.has(key)) reqMap.set(key, []);
       reqMap.get(key)!.push(tc);
     });
-    reqMap.forEach((items, groupKey) => groupedData.push({ groupKey, items }));
+    reqMap.forEach((items, groupKey) =>
+      groupedData.push({ groupKey, items: sortTestCasesById(items) })
+    );
   } else if (groupBy === 'module') {
     const modMap = new Map<string, TestCase[]>();
     filteredCases.forEach((tc) => {
-      const key = tc.module || 'Genel Modül';
+      const key = tc.module || (isEn ? 'General Module' : 'Genel Modül');
       if (!modMap.has(key)) modMap.set(key, []);
       modMap.get(key)!.push(tc);
     });
-    modMap.forEach((items, groupKey) => groupedData.push({ groupKey, items }));
+    modMap.forEach((items, groupKey) =>
+      groupedData.push({ groupKey, items: sortTestCasesById(items) })
+    );
   } else {
-    groupedData.push({ groupKey: 'Tüm Test Senaryoları', items: filteredCases });
+    groupedData.push({
+      groupKey: isEn ? 'All Test Scenarios' : 'Tüm Test Senaryoları',
+      items: sortTestCasesById(filteredCases),
+    });
   }
 
   const getPriorityBadgeClass = (p: string) => {
@@ -171,9 +181,9 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <h2 className="font-bold text-base text-white flex items-center gap-2">
-              <span>Test Case Matrisi</span>
+              <span>{isEn ? 'Test Case Matrix' : 'Test Case Matrisi'}</span>
               <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs px-2.5 py-0.5 rounded-full font-mono">
-                {filteredCases.length} Senaryo
+                {filteredCases.length} {isEn ? 'Scenarios' : 'Senaryo'}
               </span>
             </h2>
           </div>
@@ -181,7 +191,7 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
           <div className="flex items-center gap-2">
             {/* Group By Selector */}
             <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-lg text-xs font-medium border border-slate-700">
-              <span className="text-slate-400 px-1.5 text-[11px]">Grupla:</span>
+              <span className="text-slate-400 px-1.5 text-[11px]">{isEn ? 'Group:' : 'Grupla:'}</span>
               <button
                 onClick={() => setGroupBy('req')}
                 className={`px-2 py-1 rounded ${
@@ -196,7 +206,7 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                   groupBy === 'module' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Modül
+                {isEn ? 'Module' : 'Modül'}
               </button>
               <button
                 onClick={() => setGroupBy('none')}
@@ -204,16 +214,16 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                   groupBy === 'none' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Düz Liste
+                {isEn ? 'Flat List' : 'Düz Liste'}
               </button>
             </div>
 
             <button
-              onClick={() => onOpenAddModal ? onOpenAddModal() : handleAddNewRow()}
+              onClick={() => (onOpenAddModal ? onOpenAddModal() : handleAddNewRow())}
               className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Manuel Test Case Ekle</span>
+              <span>{isEn ? 'Add Manual Test Case' : 'Manuel Test Case Ekle'}</span>
             </button>
           </div>
         </div>
@@ -227,7 +237,11 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Test adı, adımları veya sonuçlarda ara..."
+              placeholder={
+                isEn
+                  ? 'Search test title, steps or results...'
+                  : 'Test adı, adımları veya sonuçlarda ara...'
+              }
               className="w-full bg-slate-950/80 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
             />
           </div>
@@ -238,7 +252,9 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
             onChange={(e) => setSelectedReqFilter(e.target.value)}
             className="bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500"
           >
-            <option value="all">Tüm Gereksinimler ({requirements.length})</option>
+            <option value="all">
+              {isEn ? `All Requirements (${requirements.length})` : `Tüm Gereksinimler (${requirements.length})`}
+            </option>
             {requirements.map((req) => (
               <option key={req.id} value={req.id}>
                 {req.id} - {req.title.slice(0, 30)}...
@@ -252,30 +268,17 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
             onChange={(e) => setSelectedTypeFilter(e.target.value)}
             className="bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500"
           >
-            <option value="all">Tüm Test Tipleri (ISTQB)</option>
-            <optgroup label="Fonksiyonel Testler">
-              <option value="Pozitif">Pozitif (Fonksiyonel Doğruluk)</option>
-              <option value="Negatif">Negatif (Hata Yönetimi)</option>
-              <option value="Sınır">Sınır Değer Analizi (BVA)</option>
-              <option value="Eşdeğer">Eşdeğer Sınıflandırma (EP)</option>
-              <option value="Durum">Durum Geçiş Testi (State Transition)</option>
-              <option value="Karar">Karar Tablosu Testi (Decision Table)</option>
-              <option value="Kullanım">Kullanım Senaryosu Testi (Use Case)</option>
+            <option value="all">{isEn ? 'All Test Types (ISTQB)' : 'Tüm Test Tipleri (ISTQB)'}</option>
+            <optgroup label={isEn ? 'Functional Tests' : 'Fonksiyonel Testler'}>
+              <option value="Pozitif">{isEn ? 'Positive (Functional Accuracy)' : 'Pozitif (Fonksiyonel Doğruluk)'}</option>
+              <option value="Negatif">{isEn ? 'Negative (Error Handling)' : 'Negatif (Hata Yönetimi)'}</option>
+              <option value="Sınır">{isEn ? 'Boundary Value Analysis (BVA)' : 'Sınır Değer Analizi (BVA)'}</option>
+              <option value="Eşdeğer">{isEn ? 'Equivalence Partitioning (EP)' : 'Eşdeğer Sınıflandırma (EP)'}</option>
             </optgroup>
-            <optgroup label="Fonksiyonel Olmayan Testler">
-              <option value="Performans">Performans Testi (Performance)</option>
-              <option value="Yük">Yük ve Stres Testi (Load & Stress)</option>
-              <option value="Güvenlik">Güvenlik ve Yetki Testi (Security)</option>
-              <option value="Kullanılabilirlik">Kullanılabilirlik Testi (Usability / UX)</option>
-              <option value="Uyumluluk">Uyumluluk ve Çapraz Platform (Compatibility)</option>
-              <option value="Erişilebilirlik">Erişilebilirlik Testi (Accessibility / WCAG)</option>
-              <option value="Güvenilirlik">Güvenilirlik ve Kurtarılabilirlik (Reliability)</option>
-            </optgroup>
-            <optgroup label="Değişiklikle İlgili & Kabul">
-              <option value="Regresyon">Regresyon Testi (Regression)</option>
-              <option value="Yeniden">Yeniden Test / Onaylama (Re-Testing)</option>
-              <option value="Kabul">Kullanıcı Kabul Testi (UAT)</option>
-              <option value="Entegrasyon">Sistem Entegrasyon Testi (SIT)</option>
+            <optgroup label={isEn ? 'Non-Functional Tests' : 'Fonksiyonel Olmayan Testler'}>
+              <option value="Performans">{isEn ? 'Performance Testing' : 'Performans Testi (Performance)'}</option>
+              <option value="Güvenlik">{isEn ? 'Security & Permissions' : 'Güvenlik ve Yetki Testi (Security)'}</option>
+              <option value="Kullanılabilirlik">{isEn ? 'Usability / UX' : 'Kullanılabilirlik Testi (Usability / UX)'}</option>
             </optgroup>
           </select>
 
@@ -285,10 +288,10 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
             onChange={(e) => setSelectedPriorityFilter(e.target.value)}
             className="bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-slate-300 focus:outline-none focus:border-indigo-500"
           >
-            <option value="all">Tüm Öncelikler</option>
-            <option value="Yüksek">Yüksek Öncelik</option>
-            <option value="Orta">Orta Öncelik</option>
-            <option value="Düşük">Düşük Öncelik</option>
+            <option value="all">{isEn ? 'All Priorities' : 'Tüm Öncelikler'}</option>
+            <option value="Yüksek">{isEn ? 'High Priority' : 'Yüksek Öncelik'}</option>
+            <option value="Orta">{isEn ? 'Medium Priority' : 'Orta Öncelik'}</option>
+            <option value="Düşük">{isEn ? 'Low Priority' : 'Düşük Öncelik'}</option>
           </select>
         </div>
       </div>
@@ -298,8 +301,12 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
         {groupedData.length === 0 || filteredCases.length === 0 ? (
           <div className="p-12 text-center text-slate-500 space-y-2">
             <AlertCircle className="w-8 h-8 mx-auto text-slate-600" />
-            <p className="text-sm font-medium">Arama kriterlerinize uygun test senaryosu bulunamadı.</p>
-            <p className="text-xs text-slate-600">Filtreleri temizleyin veya yukarıdan yeni test case ekleyin.</p>
+            <p className="text-sm font-medium">
+              {isEn ? 'No test cases match your filter criteria.' : 'Arama kriterlerinize uygun test senaryosu bulunamadı.'}
+            </p>
+            <p className="text-xs text-slate-600">
+              {isEn ? 'Clear filters or add a new test case above.' : 'Filtreleri temizleyin veya yukarıdan yeni test case ekleyin.'}
+            </p>
           </div>
         ) : (
           groupedData.map((group) => {
@@ -314,7 +321,9 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                       {group.groupKey}
                     </span>
                     {reqObj && <span className="text-xs font-semibold text-slate-200">{reqObj.title}</span>}
-                    <span className="text-[11px] text-slate-400">({group.items.length} Test)</span>
+                    <span className="text-[11px] text-slate-400">
+                      ({group.items.length} {isEn ? 'Tests' : 'Test'})
+                    </span>
                   </div>
 
                   {/* Action buttons for this requirement group */}
@@ -327,7 +336,7 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                         className="text-xs font-medium text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-colors"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>Bu Gereksinime AI Test Ekle</span>
+                        <span>{isEn ? 'AI Refine Scenario' : 'Bu Gereksinime AI Test Ekle'}</span>
                       </button>
                     )}
                   </div>
@@ -338,14 +347,22 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                   <div className="bg-slate-950/90 p-4 border-b border-amber-500/30 space-y-2 text-xs">
                     <p className="font-semibold text-amber-300 flex items-center gap-1.5">
                       <Sparkles className="w-4 h-4" />
-                      <span>[{reqObj.id}] İçin Ekstra Test Senaryoları Türet:</span>
+                      <span>
+                        {isEn
+                          ? `Derive Extra Test Scenarios for [${reqObj.id}]:`
+                          : `[${reqObj.id}] İçin Ekstra Test Senaryoları Türet:`}
+                      </span>
                     </p>
                     <div className="flex gap-2">
                       <input
                         type="text"
                         value={refinePrompt}
                         onChange={(e) => setRefinePrompt(e.target.value)}
-                        placeholder="Örn: 'Güvenlik ve SQL injection senaryoları ekle' veya 'Zaman aşımı durumlarını detaylandır'..."
+                        placeholder={
+                          isEn
+                            ? 'e.g. Add SQL injection checks or timeout handling...'
+                            : "Örn: 'Güvenlik ve SQL injection senaryoları ekle' veya 'Zaman aşımı durumlarını detaylandır'..."
+                        }
                         className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
                       />
                       <button
@@ -357,7 +374,13 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                         disabled={isRefiningReqId === reqObj.id}
                         className="bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold px-4 py-1.5 rounded-lg transition-colors flex items-center gap-1"
                       >
-                        {isRefiningReqId === reqObj.id ? 'Üretiliyor...' : 'Üret ve Ekle'}
+                        {isRefiningReqId === reqObj.id
+                          ? isEn
+                            ? 'Generating...'
+                            : 'Üretiliyor...'
+                          : isEn
+                          ? 'Generate & Add'
+                          : 'Üret ve Ekle'}
                       </button>
                     </div>
                   </div>
@@ -367,139 +390,20 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                 <table className="w-full text-left text-xs text-slate-300">
                   <thead className="bg-slate-900/80 text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-800 text-[11px]">
                     <tr>
-                      <th className="py-2.5 px-3 w-28">Test ID</th>
-                      <th className="py-2.5 px-3 w-48">Test Başlığı</th>
-                      <th className="py-2.5 px-3 w-36">Ön Koşul</th>
-                      <th className="py-2.5 px-3">Test Adımları</th>
-                      <th className="py-2.5 px-3 w-40">Test Verisi</th>
-                      <th className="py-2.5 px-3 w-52">Beklenen Sonuç</th>
-                      <th className="py-2.5 px-3 w-24 text-center">Öncelik</th>
-                      <th className="py-2.5 px-3 w-28 text-center">Test Tipi</th>
-                      <th className="py-2.5 px-3 w-20 text-center">İşlem</th>
+                      <th className="py-2.5 px-3 w-28">{isEn ? 'TC ID' : 'Test ID'}</th>
+                      <th className="py-2.5 px-3 w-48">{isEn ? 'Test Title' : 'Test Başlığı'}</th>
+                      <th className="py-2.5 px-3 w-36">{isEn ? 'Pre-conditions' : 'Ön Koşul'}</th>
+                      <th className="py-2.5 px-3">{isEn ? 'Test Steps' : 'Test Adımları'}</th>
+                      <th className="py-2.5 px-3 w-40">{isEn ? 'Test Data' : 'Test Verisi'}</th>
+                      <th className="py-2.5 px-3 w-52">{isEn ? 'Expected Result' : 'Beklenen Sonuç'}</th>
+                      <th className="py-2.5 px-3 w-24 text-center">{isEn ? 'Priority' : 'Öncelik'}</th>
+                      <th className="py-2.5 px-3 w-28 text-center">{isEn ? 'Test Type' : 'Test Tipi'}</th>
+                      <th className="py-2.5 px-3 w-20 text-center">{isEn ? 'Actions' : 'İşlem'}</th>
                     </tr>
                   </thead>
 
                   <tbody className="divide-y divide-slate-800/60">
                     {group.items.map((tc) => {
-                      const isEditing = editingTcId === tc.id;
-
-                      if (isEditing && editForm) {
-                        return (
-                          <tr key={tc.id} className="bg-indigo-950/40 border-l-4 border-indigo-500">
-                            {/* TC ID */}
-                            <td className="py-3 px-3 font-mono font-bold text-indigo-300">
-                              <input
-                                type="text"
-                                value={editForm.id}
-                                onChange={(e) => setEditForm({ ...editForm, id: e.target.value })}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
-                              />
-                            </td>
-
-                            {/* Title */}
-                            <td className="py-3 px-3">
-                              <input
-                                type="text"
-                                value={editForm.title}
-                                onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
-                              />
-                            </td>
-
-                            {/* Preconditions */}
-                            <td className="py-3 px-3">
-                              <textarea
-                                value={editForm.preconditions}
-                                onChange={(e) => setEditForm({ ...editForm, preconditions: e.target.value })}
-                                rows={2}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
-                              />
-                            </td>
-
-                            {/* Steps */}
-                            <td className="py-3 px-3">
-                              <textarea
-                                value={formatStepsText(editForm.steps)}
-                                onChange={(e) =>
-                                  setEditForm({
-                                    ...editForm,
-                                    steps: e.target.value.split('\n').filter(Boolean),
-                                  })
-                                }
-                                rows={4}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white font-mono"
-                              />
-                            </td>
-
-                            {/* Test Data */}
-                            <td className="py-3 px-3">
-                              <input
-                                type="text"
-                                value={editForm.testData}
-                                onChange={(e) => setEditForm({ ...editForm, testData: e.target.value })}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
-                              />
-                            </td>
-
-                            {/* Expected Result */}
-                            <td className="py-3 px-3">
-                              <textarea
-                                value={editForm.expectedResult}
-                                onChange={(e) => setEditForm({ ...editForm, expectedResult: e.target.value })}
-                                rows={3}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
-                              />
-                            </td>
-
-                            {/* Priority */}
-                            <td className="py-3 px-3 text-center">
-                              <select
-                                value={editForm.priority}
-                                onChange={(e) => setEditForm({ ...editForm, priority: e.target.value as any })}
-                                className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
-                              >
-                                <option value="Yüksek">Yüksek</option>
-                                <option value="Orta">Orta</option>
-                                <option value="Düşük">Düşük</option>
-                              </select>
-                            </td>
-
-                            {/* Test Type */}
-                            <td className="py-3 px-3 text-center">
-                              <select
-                                value={editForm.testType}
-                                onChange={(e) => setEditForm({ ...editForm, testType: e.target.value as any })}
-                                className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white"
-                              >
-                                <option value="Pozitif">Pozitif</option>
-                                <option value="Negatif">Negatif</option>
-                                <option value="Sınır Değer (Boundary)">Sınır Değer</option>
-                                <option value="Güvenlik">Güvenlik</option>
-                                <option value="Performans">Performans</option>
-                              </select>
-                            </td>
-
-                            {/* Actions */}
-                            <td className="py-3 px-3 text-center space-x-1">
-                              <button
-                                onClick={handleSaveEdit}
-                                className="bg-emerald-600 hover:bg-emerald-500 text-white p-1.5 rounded"
-                                title="Kaydet"
-                              >
-                                <Check className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={handleCancelEdit}
-                                className="bg-slate-800 hover:bg-slate-700 text-slate-400 p-1.5 rounded"
-                                title="İptal"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      }
-
                       return (
                         <tr
                           key={tc.id}
@@ -563,14 +467,14 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
                               <button
                                 onClick={() => handleStartEdit(tc)}
                                 className="text-slate-400 hover:text-indigo-300 p-1 rounded hover:bg-slate-800 transition-colors"
-                                title="Düzenle"
+                                title={isEn ? 'Edit' : 'Düzenle'}
                               >
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
                               <button
                                 onClick={() => onDeleteTestCase(tc.id)}
                                 className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition-colors"
-                                title="Sil"
+                                title={isEn ? 'Delete' : 'Sil'}
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -594,7 +498,9 @@ export const TestCasesMatrix: React.FC<TestCasesMatrixProps> = ({
         testCase={editingModalTc}
         requirements={requirements}
         onSave={onUpdateTestCase}
+        language={language}
       />
     </div>
   );
 };
+

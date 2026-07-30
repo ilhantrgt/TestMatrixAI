@@ -1,13 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/index.ts": {
-      "includeFiles": [
-        "server.ts",
-        "package.json"
-      ]
-    }
-  },
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [

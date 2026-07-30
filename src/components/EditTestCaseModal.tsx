@@ -9,6 +9,7 @@ interface EditTestCaseModalProps {
   testCase: TestCase | null;
   requirements: RequirementItem[];
   onSave: (updatedTc: TestCase) => void;
+  language?: 'tr' | 'en';
 }
 
 export const EditTestCaseModal: React.FC<EditTestCaseModalProps> = ({
@@ -17,7 +18,9 @@ export const EditTestCaseModal: React.FC<EditTestCaseModalProps> = ({
   testCase,
   requirements,
   onSave,
+  language = 'tr',
 }) => {
+  const isEn = language === 'en';
   const [tcId, setTcId] = useState('');
   const [selectedReqId, setSelectedReqId] = useState('');
   const [moduleName, setModuleName] = useState('');
@@ -53,7 +56,7 @@ export const EditTestCaseModal: React.FC<EditTestCaseModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
-      alert('Lütfen test senaryosu başlığını giriniz.');
+      alert(isEn ? 'Please enter a test scenario title.' : 'Lütfen test senaryosu başlığını giriniz.');
       return;
     }
 
@@ -67,11 +70,11 @@ export const EditTestCaseModal: React.FC<EditTestCaseModalProps> = ({
       ...testCase,
       id: tcId.trim() || testCase.id,
       reqId: selectedReqId,
-      module: moduleName.trim() || 'Genel Modül',
+      module: moduleName.trim() || (isEn ? 'General Module' : 'Genel Modül'),
       title: title.trim(),
       description: testCase.description || title.trim(),
       preconditions: preconditions.trim(),
-      steps: stepsArray.length > 0 ? stepsArray : ['1. Test adımını gerçekleştir.'],
+      steps: stepsArray.length > 0 ? stepsArray : [isEn ? '1. Execute test step.' : '1. Test adımını gerçekleştir.'],
       testData: testData.trim(),
       expectedResult: expectedResult.trim(),
       priority,
@@ -97,7 +100,7 @@ export const EditTestCaseModal: React.FC<EditTestCaseModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span>Test Senaryosu Düzenle & Güncelle</span>
+                <span>{isEn ? 'Edit Test Scenario Details' : 'Test Senaryosu Düzenle & Güncelle'}</span>
                 <span className="text-xs font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full">
                   {testCase.id}
                 </span>

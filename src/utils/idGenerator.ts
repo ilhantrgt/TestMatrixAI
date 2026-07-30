@@ -56,3 +56,19 @@ export function generateNextTestCaseId(reqId: string, testCases: TestCase[]): st
 
   return nextId;
 }
+
+/**
+ * Sorts an array of test cases deterministically by Requirement ID and Test Case ID.
+ * Uses natural alphanumeric sorting (e.g., TC-001 < TC-002 < TC-010).
+ */
+export function sortTestCasesById(testCases: TestCase[]): TestCase[] {
+  return [...testCases].sort((a, b) => {
+    // Primary sort by Requirement ID if different
+    if (a.reqId && b.reqId && a.reqId !== b.reqId) {
+      const reqCompare = a.reqId.localeCompare(b.reqId, undefined, { numeric: true, sensitivity: 'base' });
+      if (reqCompare !== 0) return reqCompare;
+    }
+    // Secondary sort by Test Case ID
+    return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+  });
+}
