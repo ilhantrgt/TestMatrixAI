@@ -260,20 +260,29 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         return;
       }
     } catch (err: any) {
-      console.error('Google Auth Popup error:', err);
-      if (err?.code === 'auth/popup-closed-by-user') {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+        console.info('Google Sign-In popup closed by user or request cancelled.');
         setErrorMsg(
           isEn
-            ? 'Google sign-in popup was closed before completing. Please try again.'
-            : 'Google giriş penceresi kapatıldı. Lütfen tekrar deneyiniz.'
+            ? 'Google sign-in was cancelled.'
+            : 'Google ile giriş iptal edildi.'
         );
       } else if (err?.code === 'auth/popup-blocked') {
+        console.warn('Google Auth popup blocked:', err);
         setErrorMsg(
           isEn
             ? 'Google sign-in popup was blocked by your browser. Please allow popups and try again.'
             : 'Google giriş penceresi tarayıcınız tarafından engellendi. Lütfen açılır pencerelere izin verip tekrar deneyiniz.'
         );
+      } else if (err?.code === 'auth/unauthorized-domain') {
+        console.warn('Google Auth domain unauthorized:', err);
+        setErrorMsg(
+          isEn
+            ? 'Domain unauthorized in Firebase Auth. Please add this domain to Firebase Console -> Auth -> Authorized domains.'
+            : 'Bu etki alanı (domain) Firebase yetkili listesinde değil. Lütfen Firebase Console -> Auth -> Authorized Domains kısmına domaininizi ekleyin.'
+        );
       } else {
+        console.warn('Google Auth Popup error:', err);
         setErrorMsg(
           isEn
             ? `Google authentication failed (${err?.code || 'error'}). Please try again.`
