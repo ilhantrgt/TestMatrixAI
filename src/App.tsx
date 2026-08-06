@@ -10,6 +10,7 @@ import { TestExecutionView } from './components/TestExecutionView';
 import { JiraModal } from './components/JiraModal';
 import { AddTestCaseModal } from './components/AddTestCaseModal';
 import { UserGuideModal } from './components/UserGuideModal';
+import { ProjectBar } from './components/ProjectBar';
 import { PRESET_TEMPLATES } from './data/presetTemplates';
 import { SAMPLE_REQUIREMENT_DOCS } from './data/sampleRequirements';
 import { AuthScreen } from './components/AuthScreen';
@@ -27,6 +28,7 @@ import {
   JiraConfig,
   TestRun,
   UserProfile,
+  Project,
 } from './types';
 import { exportTestCasesToExcel } from './utils/excelHelper';
 import { generateNextTestCaseId, sortTestCasesById, resequenceTestCaseIds } from './utils/idGenerator';
@@ -155,7 +157,24 @@ export default function App() {
   const [isRefiningReqId, setIsRefiningReqId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // User-scoped workspace state
+  // User-scoped projects state
+  const createDefaultProject = (id = 'proj_default_1', name = 'Ana Proje'): Project => ({
+    id,
+    name,
+    description: 'Varsayılan Test Matrix Projesi',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    requirementText: SAMPLE_REQUIREMENT_DOCS[0].content,
+    requirements: [],
+    testCases: [],
+    testRuns: DEFAULT_TEST_RUNS,
+    generationStats: null,
+    recommendations: [],
+  });
+
+  const [projects, setProjects] = useState<Project[]>([createDefaultProject()]);
+  const [activeProjectId, setActiveProjectId] = useState<string>('proj_default_1');
+
   const [requirements, setRequirements] = useState<RequirementItem[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [generationStats, setGenerationStats] = useState<any | null>(null);
@@ -167,6 +186,9 @@ export default function App() {
   useEffect(() => {
     if (!currentUser?.id) {
       setIsCloudSyncReady(false);
+      const defProj = createDefaultProject();
+      setProjects([defProj]);
+      setActiveProjectId(defProj.id);
       setRequirements([]);
       setTestCases([]);
       setGenerationStats(null);
@@ -183,7 +205,7 @@ export default function App() {
     const userCacheKey = `tm_workspace_${currentUser.id}`;
     const userJiraCacheKey = `tm_jira_config_${currentUser.id}`;
 
-    // 1. First load Jira config & workspace from user-scoped localStorage cache for fast startup
+    // 1. First load Jira config from cache
     const cachedJira = localStorage.getItem(userJiraCacheKey);
     if (cachedJira) {
       try {
@@ -195,28 +217,65 @@ export default function App() {
       setJiraConfig(DEFAULT_JIRA_CONFIG);
     }
 
+    // Helper to process workspace data (cached or from cloud)
+    const processWorkspaceData = (data: any) => {
+      if (!data) return;
+      if (data.jiraConfig) setJiraConfig(data.jiraConfig);
+
+      if (data.projects && Array.isArray(data.projects) && data.projects.length > 0) {
+        setProjects(data.projects);
+        const validActiveId =
+          data.activeProjectId && data.projects.some((p: Project) => p.id === data.activeProjectId)
+            ? data.activeProjectId
+            : data.projects[0].id;
+        setActiveProjectId(validActiveId);
+
+        const activeProj = data.projects.find((p: Project) => p.id === validActiveId) || data.projects[0];
+        setRequirements(activeProj.requirements || []);
+        setTestCases(activeProj.testCases || []);
+        setTestRuns(
+          activeProj.testRuns && activeProj.testRuns.length > 0
+            ? activeProj.testRuns
+            : DEFAULT_TEST_RUNS
+        );
+        setGenerationStats(activeProj.generationStats || null);
+        setRecommendations(activeProj.recommendations || []);
+        setRequirementText(activeProj.requirementText || '');
+      } else {
+        // Fallback/Migration from single project schema to multi-project schema
+        const migratedProj: Project = {
+          id: 'proj_default_1',
+          name: 'Ana Proje',
+          description: 'Varsayılan Projeniz',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          requirementText:
+            data.requirementText !== undefined
+              ? data.requirementText
+              : SAMPLE_REQUIREMENT_DOCS[0].content,
+          requirements: data.requirements || [],
+          testCases: data.testCases || [],
+          testRuns: data.testRuns || DEFAULT_TEST_RUNS,
+          generationStats: data.generationStats || null,
+          recommendations: data.recommendations || [],
+        };
+        setProjects([migratedProj]);
+        setActiveProjectId(migratedProj.id);
+        setRequirements(migratedProj.requirements || []);
+        setTestCases(migratedProj.testCases || []);
+        setTestRuns(migratedProj.testRuns || DEFAULT_TEST_RUNS);
+        setGenerationStats(migratedProj.generationStats || null);
+        setRecommendations(migratedProj.recommendations || []);
+        setRequirementText(migratedProj.requirementText || '');
+      }
+    };
+
+    // Load from local cache for fast load
     const cachedLocal = localStorage.getItem(userCacheKey);
     if (cachedLocal) {
       try {
-        const parsed = JSON.parse(cachedLocal);
-        setRequirements(parsed.requirements || []);
-        setTestCases(parsed.testCases || []);
-        setTestRuns(parsed.testRuns || DEFAULT_TEST_RUNS);
-        setGenerationStats(parsed.generationStats || null);
-        setRecommendations(parsed.recommendations || []);
-        if (parsed.jiraConfig) setJiraConfig(parsed.jiraConfig);
-        if (parsed.requirementText) setRequirementText(parsed.requirementText);
-      } catch {
-        // ignore
-      }
-    } else {
-      // Reset to empty workspace for a new user
-      setRequirements([]);
-      setTestCases([]);
-      setGenerationStats(null);
-      setRecommendations([]);
-      setTestRuns(DEFAULT_TEST_RUNS);
-      setRequirementText(SAMPLE_REQUIREMENT_DOCS[0].content);
+        processWorkspaceData(JSON.parse(cachedLocal));
+      } catch {}
     }
 
     // 2. Load authoritative cloud data from Firebase Firestore
@@ -224,22 +283,7 @@ export default function App() {
       .then((cloudData) => {
         if (!isMounted) return;
         if (cloudData) {
-          setRequirements(cloudData.requirements || []);
-          setTestCases(cloudData.testCases || []);
-          setTestRuns(
-            cloudData.testRuns && cloudData.testRuns.length > 0
-              ? cloudData.testRuns
-              : DEFAULT_TEST_RUNS
-          );
-          setGenerationStats(cloudData.generationStats || null);
-          setRecommendations(cloudData.recommendations || []);
-          if (cloudData.jiraConfig) {
-            setJiraConfig(cloudData.jiraConfig);
-            localStorage.setItem(userJiraCacheKey, JSON.stringify(cloudData.jiraConfig));
-          }
-          if (cloudData.requirementText) {
-            setRequirementText(cloudData.requirementText);
-          }
+          processWorkspaceData(cloudData);
         }
         setIsCloudSyncReady(true);
       })
@@ -251,12 +295,16 @@ export default function App() {
     // 3. Realtime listener for user workspace changes
     const unsubscribe = subscribeToUserData(currentUser.id, (updatedData) => {
       if (!isMounted) return;
-      if (updatedData.requirements !== undefined) setRequirements(updatedData.requirements);
-      if (updatedData.testCases !== undefined) setTestCases(updatedData.testCases);
-      if (updatedData.testRuns !== undefined) setTestRuns(updatedData.testRuns);
-      if (updatedData.generationStats !== undefined) setGenerationStats(updatedData.generationStats);
-      if (updatedData.recommendations !== undefined) setRecommendations(updatedData.recommendations);
-      if (updatedData.requirementText !== undefined) setRequirementText(updatedData.requirementText);
+      if (updatedData.projects !== undefined && Array.isArray(updatedData.projects)) {
+        processWorkspaceData(updatedData);
+      } else if (updatedData.requirements !== undefined) {
+        setRequirements(updatedData.requirements);
+        if (updatedData.testCases !== undefined) setTestCases(updatedData.testCases);
+        if (updatedData.testRuns !== undefined) setTestRuns(updatedData.testRuns);
+        if (updatedData.generationStats !== undefined) setGenerationStats(updatedData.generationStats);
+        if (updatedData.recommendations !== undefined) setRecommendations(updatedData.recommendations);
+        if (updatedData.requirementText !== undefined) setRequirementText(updatedData.requirementText);
+      }
       if (updatedData.jiraConfig !== undefined) {
         setJiraConfig(updatedData.jiraConfig || DEFAULT_JIRA_CONFIG);
       }
@@ -268,11 +316,129 @@ export default function App() {
     };
   }, [currentUser?.id]);
 
+  // Sync current active project state into the `projects` list
+  useEffect(() => {
+    if (!activeProjectId) return;
+    setProjects((prevProjects) =>
+      prevProjects.map((p) => {
+        if (p.id === activeProjectId) {
+          return {
+            ...p,
+            requirementText,
+            requirements,
+            testCases,
+            testRuns,
+            generationStats,
+            recommendations,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return p;
+      })
+    );
+  }, [
+    activeProjectId,
+    requirementText,
+    requirements,
+    testCases,
+    testRuns,
+    generationStats,
+    recommendations,
+  ]);
+
+  // Project Management Handlers
+  const handleSelectProject = (projectId: string) => {
+    if (projectId === activeProjectId) return;
+    const targetProj = projects.find((p) => p.id === projectId);
+    if (!targetProj) return;
+
+    setActiveProjectId(projectId);
+    setRequirementText(targetProj.requirementText || '');
+    setRequirements(targetProj.requirements || []);
+    setTestCases(targetProj.testCases || []);
+    setTestRuns(
+      targetProj.testRuns && targetProj.testRuns.length > 0
+        ? targetProj.testRuns
+        : DEFAULT_TEST_RUNS
+    );
+    setGenerationStats(targetProj.generationStats || null);
+    setRecommendations(targetProj.recommendations || []);
+  };
+
+  const handleCreateProject = (
+    name: string,
+    description: string,
+    startWithSample: boolean
+  ) => {
+    const newProjId = 'proj_' + Date.now();
+    const newProjText = startWithSample ? SAMPLE_REQUIREMENT_DOCS[0].content : '';
+    const newProject: Project = {
+      id: newProjId,
+      name,
+      description,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      requirementText: newProjText,
+      requirements: [],
+      testCases: [],
+      testRuns: DEFAULT_TEST_RUNS,
+      generationStats: null,
+      recommendations: [],
+    };
+
+    setProjects((prev) => [...prev, newProject]);
+    setActiveProjectId(newProjId);
+    setRequirementText(newProjText);
+    setRequirements([]);
+    setTestCases([]);
+    setTestRuns(DEFAULT_TEST_RUNS);
+    setGenerationStats(null);
+    setRecommendations([]);
+  };
+
+  const handleUpdateProject = (
+    projectId: string,
+    name: string,
+    description: string
+  ) => {
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === projectId
+          ? { ...p, name, description, updatedAt: new Date().toISOString() }
+          : p
+      )
+    );
+  };
+
+  const handleDeleteProject = (projectId: string) => {
+    if (projects.length <= 1) return; // Must keep at least 1 project
+
+    const remainingProjects = projects.filter((p) => p.id !== projectId);
+    setProjects(remainingProjects);
+
+    if (activeProjectId === projectId) {
+      const nextProject = remainingProjects[0];
+      setActiveProjectId(nextProject.id);
+      setRequirementText(nextProject.requirementText || '');
+      setRequirements(nextProject.requirements || []);
+      setTestCases(nextProject.testCases || []);
+      setTestRuns(
+        nextProject.testRuns && nextProject.testRuns.length > 0
+          ? nextProject.testRuns
+          : DEFAULT_TEST_RUNS
+      );
+      setGenerationStats(nextProject.generationStats || null);
+      setRecommendations(nextProject.recommendations || []);
+    }
+  };
+
   // Push user workspace updates to Firebase Cloud DB and user-scoped localStorage
   useEffect(() => {
-    if (!currentUser?.id || !isCloudSyncReady) return;
+    if (!currentUser?.id || !isCloudSyncReady || projects.length === 0) return;
 
     const payload = {
+      projects,
+      activeProjectId,
       requirementText,
       requirements,
       testCases,
@@ -294,6 +460,8 @@ export default function App() {
   }, [
     currentUser?.id,
     isCloudSyncReady,
+    projects,
+    activeProjectId,
     requirementText,
     requirements,
     testCases,
@@ -509,11 +677,23 @@ export default function App() {
     ];
     setTestRuns(defaultRuns);
     setActiveRunId('RUN-1');
-    localStorage.removeItem('tm_requirements');
-    localStorage.removeItem('tm_test_cases');
-    localStorage.removeItem('tm_generation_stats');
-    localStorage.removeItem('tm_test_runs');
-    localStorage.removeItem('tm_active_run_id');
+
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === activeProjectId
+          ? {
+              ...p,
+              requirementText: '',
+              requirements: [],
+              testCases: [],
+              testRuns: defaultRuns,
+              generationStats: null,
+              recommendations: [],
+              updatedAt: new Date().toISOString(),
+            }
+          : p
+      )
+    );
     setIsResetModalOpen(false);
   };
 
@@ -553,6 +733,17 @@ export default function App() {
         }
         currentUser={currentUser}
         onLogout={handleLogout}
+      />
+
+      {/* Multi-Project Switcher & Manager Bar */}
+      <ProjectBar
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onSelectProject={handleSelectProject}
+        onCreateProject={handleCreateProject}
+        onUpdateProject={handleUpdateProject}
+        onDeleteProject={handleDeleteProject}
+        language={generationConfig.language}
       />
 
       {/* Main Container */}

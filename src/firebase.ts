@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
-import { UserProfile, RequirementItem, TestCase, TestRun, JiraConfig } from './types';
+import { UserProfile, RequirementItem, TestCase, TestRun, JiraConfig, Project } from './types';
 
 const app = initializeApp(firebaseConfig);
 
@@ -26,6 +26,8 @@ export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export interface UserCloudWorkspace {
+  projects?: Project[];
+  activeProjectId?: string;
   requirementText?: string;
   requirements?: RequirementItem[];
   testCases?: TestCase[];
@@ -142,6 +144,8 @@ export async function saveUserDataToCloud(
     const dataRef = doc(db, 'userData', userId);
     // Remove undefined values
     const cleanData: Record<string, any> = { updatedAt: new Date().toISOString() };
+    if (data.projects !== undefined) cleanData.projects = data.projects;
+    if (data.activeProjectId !== undefined) cleanData.activeProjectId = data.activeProjectId;
     if (data.requirementText !== undefined) cleanData.requirementText = data.requirementText;
     if (data.requirements !== undefined) cleanData.requirements = data.requirements;
     if (data.testCases !== undefined) cleanData.testCases = data.testCases;

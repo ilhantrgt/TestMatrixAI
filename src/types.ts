@@ -1,3 +1,17 @@
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+  requirementText?: string;
+  requirements?: RequirementItem[];
+  testCases?: TestCase[];
+  testRuns?: TestRun[];
+  generationStats?: any;
+  recommendations?: string[];
+}
+
 export interface UserProfile {
   id: string;
   name: string;

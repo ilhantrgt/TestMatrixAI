@@ -17,10 +17,12 @@
     },
     "userData": {
       "title": "User Test Workspace Data",
-      "description": "User test requirements, test cases, and test runs stored in cloud database",
+      "description": "User test projects, requirements, test cases, and test runs stored in cloud database",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
+        "projects": { "type": "array" },
+        "activeProjectId": { "type": "string" },
         "requirementText": { "type": "string" },
         "requirements": { "type": "array" },
         "testCases": { "type": "array" },
@@ -28,8 +30,7 @@
         "generationStats": { "type": "object" },
         "recommendations": { "type": "array" },
         "updatedAt": { "type": "string" }
-      },
-      "required": ["userId"]
+      }
     }
   }
 }
