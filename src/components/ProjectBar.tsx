@@ -13,6 +13,8 @@ import {
   FolderPlus,
   Layers,
   X,
+  Users,
+  Share2,
 } from 'lucide-react';
 
 interface ProjectBarProps {
@@ -22,6 +24,7 @@ interface ProjectBarProps {
   onCreateProject: (name: string, description: string, startWithSample: boolean) => void;
   onUpdateProject: (projectId: string, name: string, description: string) => void;
   onDeleteProject: (projectId: string) => void;
+  onOpenShareModal?: () => void;
   language: 'tr' | 'en';
 }
 
@@ -32,6 +35,7 @@ export const ProjectBar: React.FC<ProjectBarProps> = ({
   onCreateProject,
   onUpdateProject,
   onDeleteProject,
+  onOpenShareModal,
   language,
 }) => {
   const isEn = language === 'en';
@@ -131,6 +135,23 @@ export const ProjectBar: React.FC<ProjectBarProps> = ({
                 }`}
               />
             </button>
+
+            {/* Share Project Button */}
+            {onOpenShareModal && activeProject && (
+              <button
+                onClick={onOpenShareModal}
+                className="flex items-center gap-1.5 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white px-2.5 sm:px-3 py-1.5 rounded-xl border border-white/10 hover:border-indigo-500/40 shadow-sm transition-all text-xs font-semibold shrink-0"
+                title={isEn ? 'Share Project & Team Settings' : 'Projeyi Paylaş & Ekip Ayarları'}
+              >
+                <Users className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">{isEn ? 'Share' : 'Paylaş'}</span>
+                {((activeProject.members || []).length > 0 || activeProject.isShared) && (
+                  <span className="bg-indigo-500/20 text-indigo-300 text-[10px] px-1.5 py-0.2 rounded-md font-mono font-bold border border-indigo-500/30">
+                    {(activeProject.members || []).length + 1}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Backdrop when dropdown is open */}
@@ -163,6 +184,7 @@ export const ProjectBar: React.FC<ProjectBarProps> = ({
                   const isActive = proj.id === activeProjectId;
                   const tcCount = (proj.testCases || []).length;
                   const reqCount = (proj.requirements || []).length;
+                  const isShared = proj.isShared || (proj.members || []).length > 0;
 
                   return (
                     <div
@@ -185,11 +207,16 @@ export const ProjectBar: React.FC<ProjectBarProps> = ({
                               : 'bg-slate-800 text-slate-400 group-hover:text-slate-200'
                           }`}
                         >
-                          <FolderKanban className="w-3.5 h-3.5" />
+                          {isShared ? <Users className="w-3.5 h-3.5 text-indigo-400" /> : <FolderKanban className="w-3.5 h-3.5" />}
                         </div>
                         <div className="min-w-0 text-left">
                           <p className="font-semibold text-xs text-slate-100 truncate flex items-center gap-1.5">
                             <span className="truncate">{proj.name}</span>
+                            {isShared && (
+                              <span className="bg-indigo-500/20 text-indigo-300 text-[9px] px-1 py-0.2 rounded border border-indigo-500/30 font-medium">
+                                {isEn ? 'Shared' : 'Ortak'}
+                              </span>
+                            )}
                             {isActive && (
                               <Check className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                             )}
@@ -203,6 +230,20 @@ export const ProjectBar: React.FC<ProjectBarProps> = ({
 
                       {/* Action buttons (Edit & Delete) */}
                       <div className="flex items-center gap-1 shrink-0 opacity-80 group-hover:opacity-100">
+                        {onOpenShareModal && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectProject(proj.id);
+                              onOpenShareModal();
+                              setIsDropdownOpen(false);
+                            }}
+                            className="p-1 hover:bg-slate-700 text-indigo-400 hover:text-indigo-300 rounded-md transition-colors"
+                            title={isEn ? 'Share Project' : 'Projeyi Paylaş'}
+                          >
+                            <Share2 className="w-3 h-3" />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => handleOpenEditModal(proj, e)}
                           className="p-1 hover:bg-slate-700 text-slate-400 hover:text-white rounded-md transition-colors"

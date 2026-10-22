@@ -10,6 +10,7 @@ import { AddTestCaseModal } from './components/AddTestCaseModal';
 import { UserGuideModal } from './components/UserGuideModal';
 import { ConfigurationHubModal, ConfigTab } from './components/ConfigurationHubModal';
 import { ProjectBar } from './components/ProjectBar';
+import { ShareProjectModal } from './components/ShareProjectModal';
 import { PRESET_TEMPLATES } from './data/presetTemplates';
 import { SAMPLE_REQUIREMENT_DOCS } from './data/sampleRequirements';
 import { AuthScreen } from './components/AuthScreen';
@@ -17,6 +18,10 @@ import {
   loadUserDataFromCloud,
   saveUserDataToCloud,
   subscribeToUserData,
+  saveSharedProjectToCloud,
+  deleteSharedProjectFromCloud,
+  loadSharedProjectsForUser,
+  subscribeToSharedProject,
 } from './firebase';
 import {
   ExcelTemplateConfig,
@@ -207,6 +212,7 @@ export default function App() {
 
   const [projects, setProjects] = useState<Project[]>([createDefaultProject()]);
   const [activeProjectId, setActiveProjectId] = useState<string>('proj_default_1');
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   const [requirements, setRequirements] = useState<RequirementItem[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
@@ -325,6 +331,43 @@ export default function App() {
           processWorkspaceData(cloudData, true);
         }
         setIsCloudSyncReady(true);
+
+        // Also fetch any collaborative projects shared with this user's email
+        if (currentUser.email) {
+          loadSharedProjectsForUser(currentUser.email, currentUser.id)
+            .then((sharedProjects) => {
+              if (!isMounted || !sharedProjects || sharedProjects.length === 0) return;
+              setProjects((prev) => {
+                const map: Record<string, Project> = {};
+                prev.forEach((p) => {
+                  map[p.id] = p;
+                });
+                sharedProjects.forEach((sp) => {
+                  map[sp.id] = { ...sp, isShared: true };
+                });
+                const combined = Object.values(map);
+
+                // Check URL parameter for project invite link
+                const urlParams = new URLSearchParams(window.location.search);
+                const queryProjId = urlParams.get('projectId');
+                if (queryProjId && combined.some((p) => p.id === queryProjId)) {
+                  setActiveProjectId(queryProjId);
+                  const target = combined.find((p) => p.id === queryProjId);
+                  if (target) {
+                    setRequirements(target.requirements || []);
+                    setTestCases(target.testCases || []);
+                    setTestRuns(target.testRuns || DEFAULT_TEST_RUNS);
+                    setGenerationStats(target.generationStats || null);
+                    setRecommendations(target.recommendations || []);
+                    setRequirementText(target.requirementText || '');
+                  }
+                }
+
+                return combined;
+              });
+            })
+            .catch((err) => console.warn('Error fetching shared projects:', err));
+        }
       })
       .catch((err) => {
         console.warn('Error loading user cloud data:', err);
@@ -341,7 +384,38 @@ export default function App() {
       isMounted = false;
       unsubscribe();
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.email]);
+
+  // Real-time synchronization for active shared project
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const currentProj = projects.find((p) => p.id === activeProjectId);
+    if (!currentProj?.isShared) return;
+
+    let isMounted = true;
+    const unsubShared = subscribeToSharedProject(activeProjectId, (remoteProj) => {
+      if (!isMounted || !remoteProj) return;
+      isRemoteUpdateRef.current = true;
+      setProjects((prev) =>
+        prev.map((p) => (p.id === remoteProj.id ? { ...remoteProj, isShared: true } : p))
+      );
+      setRequirements(remoteProj.requirements || []);
+      setTestCases(remoteProj.testCases || []);
+      setTestRuns(
+        remoteProj.testRuns && remoteProj.testRuns.length > 0
+          ? remoteProj.testRuns
+          : DEFAULT_TEST_RUNS
+      );
+      setGenerationStats(remoteProj.generationStats || null);
+      setRecommendations(remoteProj.recommendations || []);
+      setRequirementText(remoteProj.requirementText || '');
+    });
+
+    return () => {
+      isMounted = false;
+      unsubShared();
+    };
+  }, [activeProjectId]);
 
   // Sync current active project state into the `projects` list (guarded against redundant references)
   useEffect(() => {
@@ -418,6 +492,12 @@ export default function App() {
       description,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ownerId: currentUser?.id,
+      ownerEmail: currentUser?.email,
+      ownerName: currentUser?.name || 'Proje Yöneticisi',
+      isShared: false,
+      members: [],
+      sharedEmails: currentUser?.email ? [currentUser.email.toLowerCase().trim()] : [],
       requirementText: newProjText,
       requirements: [],
       testCases: [],
@@ -453,6 +533,11 @@ export default function App() {
   const handleDeleteProject = (projectId: string) => {
     if (projects.length <= 1) return; // Must keep at least 1 project
 
+    const targetProj = projects.find((p) => p.id === projectId);
+    if (targetProj?.isShared && targetProj.ownerId === currentUser?.id) {
+      deleteSharedProjectFromCloud(projectId).catch(() => {});
+    }
+
     const remainingProjects = projects.filter((p) => p.id !== projectId);
     setProjects(remainingProjects);
 
@@ -469,6 +554,21 @@ export default function App() {
       );
       setGenerationStats(nextProject.generationStats || null);
       setRecommendations(nextProject.recommendations || []);
+    }
+  };
+
+  // Handler for updating project team members and collaborative sharing settings
+  const handleUpdateProjectSharing = async (updatedProject: Project) => {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === updatedProject.id ? updatedProject : p))
+    );
+    await saveSharedProjectToCloud(updatedProject);
+    if (currentUser?.id) {
+      saveUserDataToCloud(currentUser.id, {
+        projects: projects.map((p) =>
+          p.id === updatedProject.id ? updatedProject : p
+        ),
+      });
     }
   };
 
@@ -509,6 +609,12 @@ export default function App() {
     const timer = setTimeout(() => {
       lastSavedPayloadStrRef.current = payloadStr;
       saveUserDataToCloud(currentUser.id, payload);
+
+      // If active project is a shared project, also sync to sharedProjects
+      const activeProj = projects.find((p) => p.id === activeProjectId);
+      if (activeProj?.isShared) {
+        saveSharedProjectToCloud(activeProj);
+      }
     }, 1200);
 
     return () => clearTimeout(timer);
@@ -803,6 +909,7 @@ export default function App() {
         onCreateProject={handleCreateProject}
         onUpdateProject={handleUpdateProject}
         onDeleteProject={handleDeleteProject}
+        onOpenShareModal={() => setIsShareModalOpen(true)}
         language={generationConfig.language}
       />
 
@@ -1065,6 +1172,21 @@ export default function App() {
         onAddTestCase={handleAddTestCase}
         language={generationConfig.language}
       />
+
+      {/* Multi-User Collaborative Share Project Modal */}
+      {(() => {
+        const activeProj = projects.find((p) => p.id === activeProjectId) || projects[0];
+        return activeProj ? (
+          <ShareProjectModal
+            isOpen={isShareModalOpen}
+            onClose={() => setIsShareModalOpen(false)}
+            project={activeProj}
+            currentUser={currentUser}
+            onUpdateProjectSharing={handleUpdateProjectSharing}
+            language={generationConfig.language}
+          />
+        ) : null;
+      })()}
 
     </div>
   );

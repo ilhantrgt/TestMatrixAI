@@ -9,6 +9,7 @@ import {
   query,
   where,
   getDocs,
+  deleteDoc,
   disableNetwork,
 } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
@@ -304,3 +305,176 @@ export function subscribeToUserData(
     }
   };
 }
+
+/**
+ * SHARED PROJECTS (MULTI-USER COLLABORATION)
+ * Stored under `sharedProjects/{projectId}`
+ */
+
+const lastKnownSharedProjectMap: Record<string, string> = {};
+const inFlightSharedWrites: Record<string, boolean> = {};
+const pendingSharedWrites: Record<string, Project> = {};
+
+/**
+ * Saves a shared project to `sharedProjects/{projectId}` with coalesced writes and deduplication
+ */
+export async function saveSharedProjectToCloud(project: Project): Promise<void> {
+  if (!project?.id || isFirestoreQuotaExceeded) return;
+
+  const projectId = project.id;
+  const serialized = JSON.stringify(project);
+  if (lastKnownSharedProjectMap[projectId] === serialized) {
+    return;
+  }
+
+  if (inFlightSharedWrites[projectId]) {
+    pendingSharedWrites[projectId] = project;
+    return;
+  }
+
+  inFlightSharedWrites[projectId] = true;
+  lastKnownSharedProjectMap[projectId] = serialized;
+
+  try {
+    const projRef = doc(db, 'sharedProjects', projectId);
+    await setDoc(
+      projRef,
+      {
+        ...project,
+        isShared: true,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (error: any) {
+    if (isQuotaOrResourceExhausted(error)) {
+      handleQuotaExceeded(error);
+      delete pendingSharedWrites[projectId];
+      inFlightSharedWrites[projectId] = false;
+      return;
+    }
+    console.warn('Firebase saveSharedProjectToCloud warning:', error);
+  } finally {
+    inFlightSharedWrites[projectId] = false;
+    if (pendingSharedWrites[projectId] && !isFirestoreQuotaExceeded) {
+      const nextData = pendingSharedWrites[projectId];
+      delete pendingSharedWrites[projectId];
+      setTimeout(() => {
+        saveSharedProjectToCloud(nextData);
+      }, 500);
+    }
+  }
+}
+
+/**
+ * Deletes a shared project from `sharedProjects/{projectId}`
+ */
+export async function deleteSharedProjectFromCloud(projectId: string): Promise<void> {
+  if (!projectId || isFirestoreQuotaExceeded) return;
+  try {
+    const projRef = doc(db, 'sharedProjects', projectId);
+    await deleteDoc(projRef);
+    delete lastKnownSharedProjectMap[projectId];
+  } catch (error: any) {
+    if (isQuotaOrResourceExhausted(error)) {
+      handleQuotaExceeded(error);
+      return;
+    }
+    console.warn('Firebase deleteSharedProjectFromCloud warning:', error);
+  }
+}
+
+/**
+ * Loads all shared projects accessible by the current user (either as owner or as invited collaborator)
+ */
+export async function loadSharedProjectsForUser(
+  email: string,
+  userId: string
+): Promise<Project[]> {
+  if ((!email && !userId) || isFirestoreQuotaExceeded) return [];
+
+  const foundProjectsMap: Record<string, Project> = {};
+  const normalizedEmail = (email || '').toLowerCase().trim();
+
+  try {
+    const sharedRef = collection(db, 'sharedProjects');
+
+    // 1. Query projects where the user's email is in sharedEmails array
+    if (normalizedEmail) {
+      const qEmail = query(
+        sharedRef,
+        where('sharedEmails', 'array-contains', normalizedEmail)
+      );
+      const emailSnap = await getDocs(qEmail);
+      emailSnap.forEach((docSnap) => {
+        const data = docSnap.data() as Project;
+        foundProjectsMap[data.id] = data;
+      });
+    }
+
+    // 2. Query projects where the user is the owner
+    if (userId) {
+      const qOwner = query(sharedRef, where('ownerId', '==', userId));
+      const ownerSnap = await getDocs(qOwner);
+      ownerSnap.forEach((docSnap) => {
+        const data = docSnap.data() as Project;
+        foundProjectsMap[data.id] = data;
+      });
+    }
+  } catch (error: any) {
+    if (isQuotaOrResourceExhausted(error)) {
+      handleQuotaExceeded(error);
+      return [];
+    }
+    console.warn('Firebase loadSharedProjectsForUser warning:', error);
+  }
+
+  return Object.values(foundProjectsMap);
+}
+
+/**
+ * Real-time listener for a single shared project document
+ */
+export function subscribeToSharedProject(
+  projectId: string,
+  onUpdate: (project: Project) => void
+): () => void {
+  if (!projectId || isFirestoreQuotaExceeded) return () => {};
+
+  const projRef = doc(db, 'sharedProjects', projectId);
+  let unsub: (() => void) | null = null;
+
+  try {
+    unsub = onSnapshot(
+      projRef,
+      (snap) => {
+        if (snap.exists()) {
+          const proj = snap.data() as Project;
+          lastKnownSharedProjectMap[projectId] = JSON.stringify(proj);
+          onUpdate(proj);
+        }
+      },
+      (error: any) => {
+        if (isQuotaOrResourceExhausted(error)) {
+          handleQuotaExceeded(error);
+          if (unsub) {
+            try { unsub(); } catch {}
+          }
+          return;
+        }
+        console.warn('Firebase subscribeToSharedProject listener warning:', error);
+      }
+    );
+  } catch (err: any) {
+    if (isQuotaOrResourceExhausted(err)) {
+      handleQuotaExceeded(err);
+    }
+  }
+
+  return () => {
+    if (unsub) {
+      try { unsub(); } catch {}
+    }
+  };
+}
+

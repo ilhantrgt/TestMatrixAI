@@ -31,6 +31,45 @@
         "recommendations": { "type": "array" },
         "updatedAt": { "type": "string" }
       }
+    },
+    "sharedProjects": {
+      "title": "Shared Multi-User Projects",
+      "description": "Collaborative test projects shared between multiple users with roles and real-time sync",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerEmail": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "members": { "type": "array" },
+        "sharedEmails": { "type": "array" },
+        "requirementText": { "type": "string" },
+        "requirements": { "type": "array" },
+        "testCases": { "type": "array" },
+        "testRuns": { "type": "array" },
+        "generationStats": { "type": "object" },
+        "recommendations": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "ownerId", "ownerEmail"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profiles"
+    },
+    "/userData/{userId}": {
+      "schema": "userData",
+      "description": "User personal workspace data"
+    },
+    "/sharedProjects/{projectId}": {
+      "schema": "sharedProjects",
+      "description": "Shared multi-user collaborative projects"
     }
   }
 }
+

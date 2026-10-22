@@ -1,9 +1,22 @@
+export interface ProjectMember {
+  email: string;
+  name?: string;
+  role: 'editor' | 'viewer' | 'admin';
+  addedAt: string;
+}
+
 export interface Project {
   id: string;
   name: string;
   description?: string;
   createdAt: string;
   updatedAt: string;
+  ownerId?: string;
+  ownerEmail?: string;
+  ownerName?: string;
+  isShared?: boolean;
+  sharedEmails?: string[];
+  members?: ProjectMember[];
   requirementText?: string;
   requirements?: RequirementItem[];
   testCases?: TestCase[];
@@ -11,6 +24,7 @@ export interface Project {
   generationStats?: any;
   recommendations?: string[];
 }
+
 
 export interface UserProfile {
   id: string;
