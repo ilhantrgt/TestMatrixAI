@@ -1,11 +1,11 @@
-// api/_lib/app.ts
+// server/app.ts
 import fs from "fs";
 import path from "path";
 import os from "os";
 import express from "express";
 import { GoogleGenAI, Type } from "@google/genai";
 
-// api/_lib/engineeringEvaluation.ts
+// server/engineeringEvaluation.ts
 function calculateGenerationStats(requirements, testCases) {
   const totalRequirements = requirements.length;
   const totalTestCases = testCases.length;
@@ -245,7 +245,7 @@ function generateEngineeringRecommendations(requirements, testCases, language = 
   return recommendations;
 }
 
-// api/_lib/app.ts
+// server/app.ts
 var app = express();
 app.use(express.json({ limit: "10mb" }));
 var OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || Buffer.from(
@@ -3000,7 +3000,7 @@ app.use((err, req, res, next) => {
 });
 var app_default = app;
 
-// api/index.ts
+// server/index.ts
 var index_default = app_default;
 export {
   index_default as default

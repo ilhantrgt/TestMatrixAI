@@ -1,5 +1,5 @@
 import express from 'express';
-import app from './api/_lib/app.ts';
+import app from './server/app.ts';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 
