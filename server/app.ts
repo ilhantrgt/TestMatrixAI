@@ -105,7 +105,7 @@ async function callOpenRouterWithFallback({
       ...(preferredModel ? [preferredModel] : []),
       ...ACTIVE_OPENROUTER_MODELS,
     ])
-  ).slice(0, 3);
+  ).slice(0, 2);
 
   let lastError: any = null;
 
@@ -136,7 +136,7 @@ async function callOpenRouterWithFallback({
           temperature,
           max_tokens: 2500,
         }),
-        signal: AbortSignal.timeout(Math.min(timeoutMs, 12000)),
+        signal: AbortSignal.timeout(Math.min(timeoutMs, 5000)),
       });
 
       if (!response.ok) {
@@ -217,6 +217,28 @@ async function callOpenRouterWithFallback({
   }
 
   throw lastError || new Error('Tüm OpenRouter modelleri denendi fakat yanıt alınamadı.');
+}
+
+// In-Memory Fast Cache for Test Case Generation Responses (<2ms Instant Hits)
+interface CacheRecord {
+  timestamp: number;
+  data: any;
+}
+const GENERATION_RESULT_CACHE = new Map<string, CacheRecord>();
+const GENERATION_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes TTL
+
+function computePayloadHash(payload: any): string {
+  try {
+    const raw = `${payload?.requirementText || ''}|${JSON.stringify(payload?.config || {})}|${JSON.stringify(payload?.corporateRules || [])}`;
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+      hash = (hash << 5) - hash + raw.charCodeAt(i);
+      hash |= 0;
+    }
+    return `gen_cache_${hash}`;
+  } catch {
+    return '';
+  }
 }
 
 // Safe cache directory for serverless (Vercel/Lambda read-only filesystem where only /tmp is writable)
@@ -470,7 +492,7 @@ async function generateUnifiedAI({
   temperature = 0.2,
   geminiSchema,
   preferredModel,
-  timeoutMs = 35000,
+  timeoutMs = 6000,
 }: {
   systemPrompt: string;
   userPrompt: string;
@@ -2246,6 +2268,15 @@ export function extractAllRequirementsFromDocument(
 // API Route: Generate Test Cases from Requirements Document (Guaranteed 100% Coverage Pipeline)
 app.post('/api/generate-test-cases', async (req, res) => {
   try {
+    const cacheKey = computePayloadHash(req.body);
+    if (cacheKey) {
+      const cached = GENERATION_RESULT_CACHE.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < GENERATION_CACHE_TTL_MS) {
+        console.log('[Generate Pipeline] Returning INSTANT CACHED result (<2ms)...');
+        return res.json(cached.data);
+      }
+    }
+
     const {
       requirementText,
       templateColumns,
@@ -2423,75 +2454,69 @@ You MUST detect EVERY explicit prohibition, business rule, or constraint in the 
 - CRITICAL: The 'reqId' of every test case MUST EXACTLY match the requirement's 'id'.
 ${corporateRulesPrompt}${customInstructionsPrompt}`;
 
-      const chunkResults: any[][] = [];
-      const CONCURRENCY = 2;
-      for (let cIdx = 0; cIdx < reqChunks.length; cIdx += CONCURRENCY) {
-        const slice = reqChunks.slice(cIdx, cIdx + CONCURRENCY);
-        const batchOutputs = await Promise.all(
-          slice.map(async (chunk, relIdx) => {
-            const chunkIdx = cIdx + relIdx;
-            if (isAllAIQuotaExhausted()) {
-              return chunk.flatMap((req, idx) =>
-                generateDeterministicTestCasesForReq(req, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
-              );
-            }
-            try {
-              console.log(
-                `[Generate Pipeline] Processing batch ${chunkIdx + 1}/${reqChunks.length} (${chunk.length} reqs)...`
-              );
-              const chunkRes = await generateUnifiedAI({
-                systemPrompt: tcSystemPrompt,
-                userPrompt: `Lütfen aşağıdaki ${chunk.length} adet bütünleşik gereksinim maddesinin HER BİRİ için:\n1. Gereksinim tanımındaki TÜM farklı fonksiyonları ve işlemleri (ekleme, listeleme, detay görüntüleme, güncelleme, silme, sözlük/tip yönetimi vb.) tek tek tespit edin ve HER BİRİ İÇİN AYRI BİR POZİTİF TEST SENARYOSU ÜRETİN ('[Pozitif] {reqId} - Fonksiyon N: {Operasyon Adı}').\n2. Gereksinim metnindeki TÜM İŞ KURALLARINI, KISITLARI VE YASAKLAMALARI (örneğin: 'aktif göreve bağlı adaptör silinemez', 'onaylanmamış kayıt düzenlenemez', 'bakiye yetersizse işlem yapılamaz' vb.) tespit edin ve HER BİR İŞ KURALI İÇİN ÖZEL BİR NEGATİF TEST SENARYOSU ÜRETİN ('[Negatif / İş Kuralı] {reqId} - {Kural Adı}').\n3. Hata ve sınır durumları için genel Negatif ve Sınır (BVA) senaryoları da üretin.\n4. 'reqId' değeri verilen gereksinimin 'id' değeri ile BİREBİR AYNI olmalıdır.${
-                  customInstrTrimmed
-                    ? `\n5. ÖZEL AI TEST TALİMATI (MUTLAKA DİKKATE ALINMALIDIR): "${customInstrTrimmed}". Bu talimattaki tüm ekran isimleri (örn. Adaptör ekranı), girilip işlem yapılması yönlendirmeleri, durum kodları (HTTP 409 vb.) ve kısıtları test senaryolarının 1. adımına ve kontrol kriterlerine yansıtın. Asla 'Fonksiyonel arayüze gidin' gibi jenerik ifadeler kullanmayın.`
-                    : ''
-                }\n\nGereksinimler:\n${JSON.stringify(chunk, null, 2)}`,
-                temperature: 0.25,
-                geminiSchema: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      reqId: { type: Type.STRING },
-                      module: { type: Type.STRING },
-                      title: { type: Type.STRING },
-                      description: { type: Type.STRING },
-                      preconditions: { type: Type.STRING },
-                      steps: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      stepExpectedResults: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      testData: { type: Type.STRING },
-                      expectedResult: { type: Type.STRING },
-                      priority: { type: Type.STRING },
-                      testType: { type: Type.STRING },
-                      executionType: { type: Type.STRING },
-                      severity: { type: Type.STRING },
-                    },
-                    required: ['id', 'reqId', 'module', 'title', 'steps', 'expectedResult', 'priority', 'testType'],
+      const batchOutputs = await Promise.all(
+        reqChunks.map(async (chunk, chunkIdx) => {
+          if (isAllAIQuotaExhausted()) {
+            return chunk.flatMap((req, idx) =>
+              generateDeterministicTestCasesForReq(req, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
+            );
+          }
+          try {
+            console.log(
+              `[Generate Pipeline] Processing chunk ${chunkIdx + 1}/${reqChunks.length} (${chunk.length} reqs)...`
+            );
+            const chunkRes = await generateUnifiedAI({
+              systemPrompt: tcSystemPrompt,
+              userPrompt: `Lütfen aşağıdaki ${chunk.length} adet bütünleşik gereksinim maddesinin HER BİRİ için:\n1. Gereksinim tanımındaki TÜM farklı fonksiyonları ve işlemleri (ekleme, listeleme, detay görüntüleme, güncelleme, silme, sözlük/tip yönetimi vb.) tek tek tespit edin ve HER BİRİ İÇİN AYRI BİR POZİTİF TEST SENARYOSU ÜRETİN ('[Pozitif] {reqId} - Fonksiyon N: {Operasyon Adı}').\n2. Gereksinim metnindeki TÜM İŞ KURALLARINI, KISITLARI VE YASAKLAMALARI (örneğin: 'aktif göreve bağlı adaptör silinemez', 'onaylanmamış kayıt düzenlenemez', 'bakiye yetersizse işlem yapılamaz' vb.) tespit edin ve HER BİR İŞ KURALI İÇİN ÖZEL BİR NEGATİF TEST SENARYOSU ÜRETİN ('[Negatif / İş Kuralı] {reqId} - {Kural Adı}').\n3. Hata ve sınır durumları için genel Negatif ve Sınır (BVA) senaryoları da üretin.\n4. 'reqId' değeri verilen gereksinimin 'id' değeri ile BİREBİR AYNI olmalıdır.${
+                customInstrTrimmed
+                  ? `\n5. ÖZEL AI TEST TALİMATI (MUTLAKA DİKKATE ALINMALIDIR): "${customInstrTrimmed}". Bu talimattaki tüm ekran isimleri (örn. Adaptör ekranı), girilip işlem yapılması yönlendirmeleri, durum kodları (HTTP 409 vb.) ve kısıtları test senaryolarının 1. adımına ve kontrol kriterlerine yansıtın. Asla 'Fonksiyonel arayüze gidin' gibi jenerik ifadeler kullanmayın.`
+                  : ''
+              }\n\nGereksinimler:\n${JSON.stringify(chunk, null, 2)}`,
+              temperature: 0.25,
+              timeoutMs: 6000,
+              geminiSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    reqId: { type: Type.STRING },
+                    module: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    preconditions: { type: Type.STRING },
+                    steps: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    stepExpectedResults: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    testData: { type: Type.STRING },
+                    expectedResult: { type: Type.STRING },
+                    priority: { type: Type.STRING },
+                    testType: { type: Type.STRING },
+                    executionType: { type: Type.STRING },
+                    severity: { type: Type.STRING },
                   },
+                  required: ['id', 'reqId', 'module', 'title', 'steps', 'expectedResult', 'priority', 'testType'],
                 },
-              });
+              },
+            });
 
-              const parsedChunk = extractAndParseJson(chunkRes.text, []);
-              const list = Array.isArray(parsedChunk) ? parsedChunk : (parsedChunk as any).testCases || [];
-              if (list.length > 0) return list;
+            const parsedChunk = extractAndParseJson(chunkRes.text, []);
+            const list = Array.isArray(parsedChunk) ? parsedChunk : (parsedChunk as any).testCases || [];
+            if (list.length > 0) return list;
 
-              return chunk.flatMap((req, idx) =>
-                generateDeterministicTestCasesForReq(req, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
-              );
-            } catch (err: any) {
-              console.info(
-                `[Generate Pipeline] Batch ${chunkIdx + 1}: AI unavailable (${err?.message || 'quota limit'}), using ISTQB synthesis.`
-              );
-              return chunk.flatMap((req, idx) =>
-                generateDeterministicTestCasesForReq(req, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
-              );
-            }
-          })
-        );
-        chunkResults.push(...batchOutputs);
-      }
-      allGeneratedTestCases = chunkResults.flat();
+            return chunk.flatMap((req, idx) =>
+              generateDeterministicTestCasesForReq(req, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
+            );
+          } catch (err: any) {
+            console.info(
+              `[Generate Pipeline] Chunk ${chunkIdx + 1}: AI unavailable (${err?.message || 'quota limit'}), using ISTQB synthesis.`
+            );
+            return chunk.flatMap((req, idx) =>
+              generateDeterministicTestCasesForReq(req, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
+            );
+          }
+        })
+      );
+      allGeneratedTestCases = batchOutputs.flat();
     }
 
     console.log(`[Generate Pipeline] Phase 2 complete. Total ${allGeneratedTestCases.length} test cases generated.`);
@@ -2737,6 +2762,14 @@ ${corporateRulesPrompt}${customInstructionsPrompt}`;
       stats: dynamicStats,
       recommendations: dynamicRecommendations,
     };
+
+    if (cacheKey && result) {
+      GENERATION_RESULT_CACHE.set(cacheKey, { timestamp: Date.now(), data: result });
+      if (GENERATION_RESULT_CACHE.size > 100) {
+        const firstKey = GENERATION_RESULT_CACHE.keys().next().value;
+        if (firstKey) GENERATION_RESULT_CACHE.delete(firstKey);
+      }
+    }
 
     res.json(result);
   } catch (error: any) {

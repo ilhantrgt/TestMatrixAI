@@ -313,7 +313,7 @@ async function callOpenRouterWithFallback({
       ...preferredModel ? [preferredModel] : [],
       ...ACTIVE_OPENROUTER_MODELS
     ])
-  ).slice(0, 3);
+  ).slice(0, 2);
   let lastError = null;
   for (const model of candidateModels) {
     try {
@@ -343,7 +343,7 @@ async function callOpenRouterWithFallback({
           temperature,
           max_tokens: 2500
         }),
-        signal: AbortSignal.timeout(Math.min(timeoutMs, 12e3))
+        signal: AbortSignal.timeout(Math.min(timeoutMs, 5e3))
       });
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "");
@@ -403,6 +403,21 @@ async function callOpenRouterWithFallback({
     }
   }
   throw lastError || new Error("T\xFCm OpenRouter modelleri denendi fakat yan\u0131t al\u0131namad\u0131.");
+}
+var GENERATION_RESULT_CACHE = /* @__PURE__ */ new Map();
+var GENERATION_CACHE_TTL_MS = 15 * 60 * 1e3;
+function computePayloadHash(payload) {
+  try {
+    const raw = `${payload?.requirementText || ""}|${JSON.stringify(payload?.config || {})}|${JSON.stringify(payload?.corporateRules || [])}`;
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+      hash = (hash << 5) - hash + raw.charCodeAt(i);
+      hash |= 0;
+    }
+    return `gen_cache_${hash}`;
+  } catch {
+    return "";
+  }
 }
 var cacheDir = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === "production" ? os.tmpdir() : process.cwd();
 var OPENROUTER_QUOTA_CACHE_FILE = path.join(cacheDir, ".openrouter_quota_cache.json");
@@ -599,7 +614,7 @@ async function generateUnifiedAI({
   temperature = 0.2,
   geminiSchema,
   preferredModel,
-  timeoutMs = 35e3
+  timeoutMs = 6e3
 }) {
   const geminiKey = process.env.GEMINI_API_KEY;
   const isOpenRouterPreferred = Boolean(preferredModel) && (preferredModel?.includes("/") || preferredModel?.endsWith(":free"));
@@ -1848,6 +1863,14 @@ function extractAllRequirementsFromDocument(rawText, isTurkish = true) {
 }
 app.post("/api/generate-test-cases", async (req, res) => {
   try {
+    const cacheKey = computePayloadHash(req.body);
+    if (cacheKey) {
+      const cached = GENERATION_RESULT_CACHE.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < GENERATION_CACHE_TTL_MS) {
+        console.log("[Generate Pipeline] Returning INSTANT CACHED result (<2ms)...");
+        return res.json(cached.data);
+      }
+    }
     const {
       requirementText,
       templateColumns,
@@ -1987,25 +2010,20 @@ You MUST detect EVERY explicit prohibition, business rule, or constraint in the 
 - In addition to business rule tests, generate standard Negative (invalid input, missing parameter) and Boundary Value Analysis (BVA) test cases.
 - CRITICAL: The 'reqId' of every test case MUST EXACTLY match the requirement's 'id'.
 ${corporateRulesPrompt}${customInstructionsPrompt}`;
-      const chunkResults = [];
-      const CONCURRENCY = 2;
-      for (let cIdx = 0; cIdx < reqChunks.length; cIdx += CONCURRENCY) {
-        const slice = reqChunks.slice(cIdx, cIdx + CONCURRENCY);
-        const batchOutputs = await Promise.all(
-          slice.map(async (chunk, relIdx) => {
-            const chunkIdx = cIdx + relIdx;
-            if (isAllAIQuotaExhausted()) {
-              return chunk.flatMap(
-                (req2, idx) => generateDeterministicTestCasesForReq(req2, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
-              );
-            }
-            try {
-              console.log(
-                `[Generate Pipeline] Processing batch ${chunkIdx + 1}/${reqChunks.length} (${chunk.length} reqs)...`
-              );
-              const chunkRes = await generateUnifiedAI({
-                systemPrompt: tcSystemPrompt,
-                userPrompt: `L\xFCtfen a\u015Fa\u011F\u0131daki ${chunk.length} adet b\xFCt\xFCnle\u015Fik gereksinim maddesinin HER B\u0130R\u0130 i\xE7in:
+      const batchOutputs = await Promise.all(
+        reqChunks.map(async (chunk, chunkIdx) => {
+          if (isAllAIQuotaExhausted()) {
+            return chunk.flatMap(
+              (req2, idx) => generateDeterministicTestCasesForReq(req2, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
+            );
+          }
+          try {
+            console.log(
+              `[Generate Pipeline] Processing chunk ${chunkIdx + 1}/${reqChunks.length} (${chunk.length} reqs)...`
+            );
+            const chunkRes = await generateUnifiedAI({
+              systemPrompt: tcSystemPrompt,
+              userPrompt: `L\xFCtfen a\u015Fa\u011F\u0131daki ${chunk.length} adet b\xFCt\xFCnle\u015Fik gereksinim maddesinin HER B\u0130R\u0130 i\xE7in:
 1. Gereksinim tan\u0131m\u0131ndaki T\xDCM farkl\u0131 fonksiyonlar\u0131 ve i\u015Flemleri (ekleme, listeleme, detay g\xF6r\xFCnt\xFCleme, g\xFCncelleme, silme, s\xF6zl\xFCk/tip y\xF6netimi vb.) tek tek tespit edin ve HER B\u0130R\u0130 \u0130\xC7\u0130N AYRI B\u0130R POZ\u0130T\u0130F TEST SENARYOSU \xDCRET\u0130N ('[Pozitif] {reqId} - Fonksiyon N: {Operasyon Ad\u0131}').
 2. Gereksinim metnindeki T\xDCM \u0130\u015E KURALLARINI, KISITLARI VE YASAKLAMALARI (\xF6rne\u011Fin: 'aktif g\xF6reve ba\u011Fl\u0131 adapt\xF6r silinemez', 'onaylanmam\u0131\u015F kay\u0131t d\xFCzenlenemez', 'bakiye yetersizse i\u015Flem yap\u0131lamaz' vb.) tespit edin ve HER B\u0130R \u0130\u015E KURALI \u0130\xC7\u0130N \xD6ZEL B\u0130R NEGAT\u0130F TEST SENARYOSU \xDCRET\u0130N ('[Negatif / \u0130\u015F Kural\u0131] {reqId} - {Kural Ad\u0131}').
 3. Hata ve s\u0131n\u0131r durumlar\u0131 i\xE7in genel Negatif ve S\u0131n\u0131r (BVA) senaryolar\u0131 da \xFCretin.
@@ -2014,50 +2032,49 @@ ${corporateRulesPrompt}${customInstructionsPrompt}`;
 
 Gereksinimler:
 ${JSON.stringify(chunk, null, 2)}`,
-                temperature: 0.25,
-                geminiSchema: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      reqId: { type: Type.STRING },
-                      module: { type: Type.STRING },
-                      title: { type: Type.STRING },
-                      description: { type: Type.STRING },
-                      preconditions: { type: Type.STRING },
-                      steps: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      stepExpectedResults: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      testData: { type: Type.STRING },
-                      expectedResult: { type: Type.STRING },
-                      priority: { type: Type.STRING },
-                      testType: { type: Type.STRING },
-                      executionType: { type: Type.STRING },
-                      severity: { type: Type.STRING }
-                    },
-                    required: ["id", "reqId", "module", "title", "steps", "expectedResult", "priority", "testType"]
-                  }
+              temperature: 0.25,
+              timeoutMs: 6e3,
+              geminiSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    reqId: { type: Type.STRING },
+                    module: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    preconditions: { type: Type.STRING },
+                    steps: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    stepExpectedResults: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    testData: { type: Type.STRING },
+                    expectedResult: { type: Type.STRING },
+                    priority: { type: Type.STRING },
+                    testType: { type: Type.STRING },
+                    executionType: { type: Type.STRING },
+                    severity: { type: Type.STRING }
+                  },
+                  required: ["id", "reqId", "module", "title", "steps", "expectedResult", "priority", "testType"]
                 }
-              });
-              const parsedChunk = extractAndParseJson(chunkRes.text, []);
-              const list = Array.isArray(parsedChunk) ? parsedChunk : parsedChunk.testCases || [];
-              if (list.length > 0) return list;
-              return chunk.flatMap(
-                (req2, idx) => generateDeterministicTestCasesForReq(req2, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
-              );
-            } catch (err) {
-              console.info(
-                `[Generate Pipeline] Batch ${chunkIdx + 1}: AI unavailable (${err?.message || "quota limit"}), using ISTQB synthesis.`
-              );
-              return chunk.flatMap(
-                (req2, idx) => generateDeterministicTestCasesForReq(req2, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
-              );
-            }
-          })
-        );
-        chunkResults.push(...batchOutputs);
-      }
-      allGeneratedTestCases = chunkResults.flat();
+              }
+            });
+            const parsedChunk = extractAndParseJson(chunkRes.text, []);
+            const list = Array.isArray(parsedChunk) ? parsedChunk : parsedChunk.testCases || [];
+            if (list.length > 0) return list;
+            return chunk.flatMap(
+              (req2, idx) => generateDeterministicTestCasesForReq(req2, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
+            );
+          } catch (err) {
+            console.info(
+              `[Generate Pipeline] Chunk ${chunkIdx + 1}: AI unavailable (${err?.message || "quota limit"}), using ISTQB synthesis.`
+            );
+            return chunk.flatMap(
+              (req2, idx) => generateDeterministicTestCasesForReq(req2, chunkIdx * CHUNK_SIZE + idx, config, isTurkish)
+            );
+          }
+        })
+      );
+      allGeneratedTestCases = batchOutputs.flat();
     }
     console.log(`[Generate Pipeline] Phase 2 complete. Total ${allGeneratedTestCases.length} test cases generated.`);
     for (let i = 0; i < cleanedRequirements.length; i++) {
@@ -2240,6 +2257,13 @@ ${JSON.stringify(chunk, null, 2)}`,
       stats: dynamicStats,
       recommendations: dynamicRecommendations
     };
+    if (cacheKey && result) {
+      GENERATION_RESULT_CACHE.set(cacheKey, { timestamp: Date.now(), data: result });
+      if (GENERATION_RESULT_CACHE.size > 100) {
+        const firstKey = GENERATION_RESULT_CACHE.keys().next().value;
+        if (firstKey) GENERATION_RESULT_CACHE.delete(firstKey);
+      }
+    }
     res.json(result);
   } catch (error) {
     console.info("[Generate Pipeline] Unexpected exception caught, applying emergency synthesis fallback:", error?.message || error);
