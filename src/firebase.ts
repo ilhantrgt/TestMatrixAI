@@ -219,8 +219,44 @@ export function getWorkspaceContentSignature(data: UserCloudWorkspace): string {
   });
 }
 
+const QUOTA_STORAGE_KEY = 'tm_firestore_quota_exceeded_timestamp';
+
+// Check if quota was exceeded recently (e.g. today)
+function checkInitialQuotaStatus(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (!raw) return false;
+    const timestamp = parseInt(raw, 10);
+    // If recorded within last 20 hours, consider still in quota exhaustion window
+    if (!isNaN(timestamp) && Date.now() - timestamp < 20 * 60 * 60 * 1000) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 // Track whether Firestore has hit quota limits today
-let isFirestoreQuotaExceeded = false;
+let isFirestoreQuotaExceeded = checkInitialQuotaStatus();
+const quotaSubscribers = new Set<(isExceeded: boolean) => void>();
+
+export function getIsFirestoreQuotaExceeded(): boolean {
+  return isFirestoreQuotaExceeded;
+}
+
+export function subscribeToQuotaStatus(listener: (isExceeded: boolean) => void): () => void {
+  quotaSubscribers.add(listener);
+  listener(isFirestoreQuotaExceeded);
+  return () => {
+    quotaSubscribers.delete(listener);
+  };
+}
+
+export function getFirestoreUpgradeUrl(): string {
+  const proj = firebaseConfig.projectId || 'xenon-conquest-wdw25';
+  const dbId = firebaseConfig.firestoreDatabaseId || 'ai-studio-testmatrixaitest-713a3635-d7d5-41e6-bdf7-fba2aad7c71a';
+  return `https://console.firebase.google.com/project/${proj}/firestore/databases/${dbId}/data?openUpgradeDialog=true`;
+}
 
 // Track the last serialized signature per user to prevent redundant writes
 const lastKnownCloudSignatureMap: Record<string, string> = {};
@@ -242,8 +278,26 @@ function isQuotaError(err: any): boolean {
 }
 
 function handleQuotaWarning(context: string, err?: any) {
+  if (!isFirestoreQuotaExceeded) {
+    isFirestoreQuotaExceeded = true;
+    try {
+      localStorage.setItem(QUOTA_STORAGE_KEY, Date.now().toString());
+    } catch {}
+    quotaSubscribers.forEach((cb) => {
+      try {
+        cb(true);
+      } catch {}
+    });
+  }
+
+  // Clear in-flight queues to halt repeat failures
+  Object.keys(pendingWrites).forEach((k) => delete pendingWrites[k]);
+  Object.keys(inFlightWrites).forEach((k) => (inFlightWrites[k] = false));
+  Object.keys(pendingSharedWrites).forEach((k) => delete pendingSharedWrites[k]);
+  Object.keys(inFlightSharedWrites).forEach((k) => (inFlightSharedWrites[k] = false));
+
   console.warn(
-    `[TestMatrix AI] Firebase Firestore işlem uyarısı (${context}):`,
+    `[TestMatrix AI] Firebase Firestore günlük kota sınırına ulaşıldı (${context}): Veriler yerel tarayıcı hafızasında (Local Storage) korunmaktadır.`,
     err?.message || err
   );
 }
@@ -252,7 +306,7 @@ function handleQuotaWarning(context: string, err?: any) {
  * Saves user profile to Firestore `users/{userId}` document
  */
 export async function saveUserProfileToCloud(user: UserProfile): Promise<void> {
-  if (!user?.id) return;
+  if (!user?.id || isFirestoreQuotaExceeded) return;
   try {
     const userRef = doc(db, 'users', user.id);
     const sanitizedUser = sanitizeForFirestore({
@@ -322,7 +376,7 @@ export async function saveUserDataToCloud(
   userId: string,
   data: UserCloudWorkspace
 ): Promise<void> {
-  if (!userId) return;
+  if (!userId || isFirestoreQuotaExceeded) return;
 
   const signature = getWorkspaceContentSignature(data);
   if (lastKnownCloudSignatureMap[userId] === signature) {
@@ -358,7 +412,7 @@ export async function saveUserDataToCloud(
   } finally {
     inFlightWrites[userId] = false;
 
-    if (pendingWrites[userId]) {
+    if (!isFirestoreQuotaExceeded && pendingWrites[userId]) {
       const nextData = pendingWrites[userId];
       delete pendingWrites[userId];
       setTimeout(() => {
@@ -530,6 +584,10 @@ export async function saveSharedProjectToCloud(project: Project, force = false):
   // 1. Always save to local multi-user store and broadcast across tabs
   saveLocalSharedProject(cleanedProject);
 
+  if (isFirestoreQuotaExceeded) {
+    return;
+  }
+
   // 2. Check content signature: If identical to last saved and not forced, skip redundant network write
   const signature = getProjectContentSignature(cleanedProject);
   if (!force && lastKnownSharedSignatureMap[projectId] === signature) {
@@ -564,7 +622,7 @@ export async function saveSharedProjectToCloud(project: Project, force = false):
     delete pendingSharedWrites[projectId];
   } finally {
     inFlightSharedWrites[projectId] = false;
-    if (pendingSharedWrites[projectId]) {
+    if (!isFirestoreQuotaExceeded && pendingSharedWrites[projectId]) {
       const nextData = pendingSharedWrites[projectId];
       delete pendingSharedWrites[projectId];
       setTimeout(() => {

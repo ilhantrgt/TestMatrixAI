@@ -27,6 +27,8 @@ import {
   getSharedProjectById,
   getWorkspaceContentSignature,
   getProjectContentSignature,
+  subscribeToQuotaStatus,
+  getFirestoreUpgradeUrl,
 } from './firebase';
 import {
   ExcelTemplateConfig,
@@ -65,6 +67,9 @@ import {
   ShieldCheck,
   BarChart3,
   AlertCircle,
+  AlertTriangle,
+  ExternalLink,
+  X,
   CheckCircle2,
   Download,
   Sparkles,
@@ -252,6 +257,15 @@ export default function App() {
   const [staticTestReports, setStaticTestReports] = useState<Record<string, RequirementStaticTestReport>>({});
   const [staticTestSummary, setStaticTestSummary] = useState<OverallStaticTestSummary | null>(null);
   const [isAnalyzingStaticTest, setIsAnalyzingStaticTest] = useState(false);
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+  const [isQuotaBannerVisible, setIsQuotaBannerVisible] = useState(true);
+
+  useEffect(() => {
+    const unsub = subscribeToQuotaStatus((exceeded) => {
+      setIsQuotaExceeded(exceeded);
+    });
+    return () => unsub();
+  }, []);
 
   const lastSavedPayloadStrRef = React.useRef<string>('');
   const isRemoteUpdateRef = React.useRef<boolean>(false);
@@ -1218,6 +1232,36 @@ export default function App() {
         onLogout={handleLogout}
         activeRulesCount={corporateRules.filter((r) => r.isDefaultActive).length}
       />
+
+      {/* Cloud Quota Exceeded Notification Banner */}
+      {isQuotaExceeded && isQuotaBannerVisible && (
+        <div className="bg-amber-950/80 border-b border-amber-500/40 px-4 py-2 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3 animate-in fade-in shadow-inner">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Bulut Veritabanı Günlük Yazma Kotası (Free Tier) Doldu:</strong> Tüm projeleriniz ve test senaryolarınız yerel tarayıcı hafızasında (Local Storage) güvenle korunmaktadır ve kesintisiz çalışmaya devam edebilirsiniz. Kotanız yarın sıfırlanacaktır.
+            </span>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <a
+              href={getFirestoreUpgradeUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded text-[11px] transition-colors flex items-center gap-1 shadow-sm"
+            >
+              <span>Firebase Konsolunda Yükselt</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            <button
+              onClick={() => setIsQuotaBannerVisible(false)}
+              className="p-1 hover:bg-white/10 rounded text-amber-300 transition-colors"
+              title="Kapat"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Multi-Project Switcher & Manager Bar */}
       <ProjectBar
