@@ -843,8 +843,9 @@ function generateDeterministicTestCasesForReq(
   const testCases: any[] = [];
   let tcSeq = 1;
 
-  // Operational Capability Detector: Identifies distinct CRUD & functional capabilities mentioned in title + desc
-  const textToScan = `${title} ${desc}`.toLowerCase();
+  // Operational Capability Detector: Identifies distinct CRUD & functional capabilities mentioned in title + desc + customInstructions
+  const customInstr = String(config?.customInstructions || '').trim();
+  const textToScan = `${title} ${desc} ${customInstr}`.toLowerCase();
   const hasActiveTaskConstraint =
     textToScan.includes('aktif göreve bağlı') ||
     textToScan.includes('göreve bağlı') ||
@@ -852,8 +853,9 @@ function generateDeterministicTestCasesForReq(
     textToScan.includes('linked to active task') ||
     textToScan.includes('assigned to active');
 
-  // Detect explicit business rules & prohibition constraints
-  const detectedRules = extractBusinessRuleConstraints(title, desc, mod, isTurkish);
+  // Detect explicit business rules & prohibition constraints (combining description and custom prompt guidance)
+  const combinedRuleText = customInstr ? `${desc}\n[Özel Talimat]: ${customInstr}` : desc;
+  const detectedRules = extractBusinessRuleConstraints(title, combinedRuleText, mod, isTurkish);
 
   const detectedOps: Array<{
     opNameTr: string;
@@ -1686,6 +1688,80 @@ function generateDeterministicTestCasesForReq(
     });
   }
 
+  // 4. Generate Dedicated Custom Instruction Test Case if user provided custom prompt guidance
+  if (customInstr && customInstr.length > 0) {
+    const isSpecificallyMentioned = customInstr.toLowerCase().includes(String(reqId).toLowerCase());
+    const hasSpecificReqMentions = /\b(ad-f\d+|req-\d+|td-\d+|fr-\d+)\b/i.test(customInstr);
+    const shouldGenerateDedicatedCustomCase = isSpecificallyMentioned || !hasSpecificReqMentions;
+
+    if (shouldGenerateDedicatedCustomCase) {
+      const isNegative = /hata|engel|yasak|geçersiz|reddet|409|400|422|negative|error|conflict|cannot/i.test(customInstr);
+      const isBva = /sınır|bva|limit|min|max|boundary|aralık/i.test(customInstr);
+      const isSecurity = /yetki|rol|güvenlik|auth|admin|token|izin|security/i.test(customInstr);
+
+      const assignedType = isNegative
+        ? 'Negatif (Hata Yönetimi)'
+        : isBva
+        ? 'Sınır Değer Analizi (BVA)'
+        : isSecurity
+        ? 'Güvenlik ve Yetki Testi (Security)'
+        : 'Pozitif (Fonksiyonel Doğruluk)';
+
+      testCases.push({
+        id: `TC-${reqId}-${String(tcSeq++).padStart(2, '0')}`,
+        reqId,
+        module: mod,
+        title: isTurkish
+          ? `[Özel Talimat] ${reqId} - ${customInstr.substring(0, 65)}`
+          : `[Custom Instruction] ${reqId} - ${customInstr.substring(0, 65)}`,
+        description: isTurkish
+          ? `Özel AI Test Talimatında belirtilen kural ve detayların ("${customInstr}") ${reqId} gereksinimi için eksiksiz işletildiğinin doğrulanması.`
+          : `Verification of user custom prompt guidance ("${customInstr}") for requirement ${reqId}.`,
+        preconditions: isTurkish
+          ? `Sistem aktif, kullanıcı oturumu açık ve özel talimatta tanımlanan test koşulları hazır olmalıdır: "${customInstr.substring(0, 75)}".`
+          : `System active with custom test preconditions prepared: "${customInstr.substring(0, 75)}".`,
+        steps: isTurkish
+          ? [
+              `1. ${mod} ekranını veya ilgili API uç noktasını açın.`,
+              `2. Özel talimatta belirtilen parametre ve koşulları sağlayın: "${customInstr.substring(0, 90)}".`,
+              `3. İşlem onay butonuna tıklayın veya API isteğini tetikleyin.`,
+              `4. Sistemin yanıtını, dönen durum kodunu ve ekran geri bildirimini inceleyin.`,
+              `5. Özel talimattaki tüm kontrol kriterlerinin eksiksiz sağlandığını doğrulayın.`,
+            ]
+          : [
+              `1. Open ${mod} view or API endpoint.`,
+              `2. Provide parameters per custom instruction: "${customInstr.substring(0, 90)}".`,
+              `3. Submit or trigger action.`,
+              `4. Inspect system response, status code, and UI feedback.`,
+              `5. Confirm all custom criteria are satisfied.`,
+            ],
+        stepExpectedResults: isTurkish
+          ? [
+              `1. Modül arayüzü veya API endpoint hatasız yanıt vermelidir.`,
+              `2. Özel talimat verileri sisteme doğru formatta iletilmelidir.`,
+              `3. Sistem isteği işleme almalı veya kısıt kuralını devreye sokmalıdır.`,
+              `4. Beklenen sonuç ve ilgili hata/başarı mesajı ekranda/yanıtta görüntülenmelidir.`,
+              `5. Özel talimatta belirtilen şartın tam karşılandığı teyit edilmelidir.`,
+            ]
+          : [
+              `1. Target screen/endpoint loaded.`,
+              `2. Custom parameters supplied.`,
+              `3. Request processed or constraint enforced.`,
+              `4. Expected feedback or status code verified.`,
+              `5. Full compliance with custom instruction verified.`,
+            ],
+        testData: `Özel Talimat Test Verisi: ${customInstr.substring(0, 100)}`,
+        expectedResult: isTurkish
+          ? `Özel AI test talimatında tanımlanan tüm kural ve gereksinimlerin sistem tarafından eksiksiz karşılandığı doğrulanmalıdır.`
+          : `System strictly satisfies all directives specified in custom prompt guidance.`,
+        priority: 'Yüksek',
+        testType: assignedType,
+        executionType: 'Manuel',
+        severity: isNegative || isSecurity ? 'Yüksek' : 'Normal',
+      });
+    }
+  }
+
   return testCases;
 }
 
@@ -2044,6 +2120,19 @@ app.post('/api/generate-test-cases', async (req, res) => {
       }))
     );
 
+    // If user provided custom prompt guidance, enrich matching or all requirements so AI & synthesis engines strictly adhere
+    const customInstrTrimmed = String(config?.customInstructions || '').trim();
+    if (customInstrTrimmed) {
+      cleanedRequirements.forEach((req: any) => {
+        const reqIdLower = String(req.id).toLowerCase();
+        const mentionsThisReq = customInstrTrimmed.toLowerCase().includes(reqIdLower);
+        const hasSpecificReqMentions = /\b(ad-f\d+|req-\d+|td-\d+|fr-\d+)\b/i.test(customInstrTrimmed);
+        if (mentionsThisReq || !hasSpecificReqMentions) {
+          req.description = `${req.description}\n[Özel AI Test Talimatı]: ${customInstrTrimmed}`.trim();
+        }
+      });
+    }
+
     console.log(`[Generate Pipeline] Extracted ${cleanedRequirements.length} requirements. Starting Phase 2 (Test Generation)...`);
 
     // ==========================================================
@@ -2073,6 +2162,14 @@ app.post('/api/generate-test-cases', async (req, res) => {
               .join('\n\n')}\n`
           : '';
 
+      const customInstructionsPrompt =
+        customInstrTrimmed.length > 0
+          ? `\nCRITICAL MANDATORY INSTRUCTION 3 - USER CUSTOM PROMPT INSTRUCTIONS (Özel AI Test Talimatı):
+The user provided explicit test design directives:
+"${customInstrTrimmed}"
+You MUST strictly incorporate all rules, constraints, edge cases, parameters, status codes, and error messages specified in these custom instructions into the generated test cases. For any requirement specifically mentioned or affected by these instructions, generate dedicated test cases or adapt steps to strictly validate these exact rules!\n`
+          : '';
+
       const tcSystemPrompt = `You are a Senior Principal ISTQB Certified QA Test Engineer. Generate comprehensive test cases in ${
         isTurkish ? 'Turkish' : 'English'
       } from: ${testTypesListStr}.
@@ -2095,7 +2192,7 @@ You MUST detect EVERY explicit prohibition, business rule, or constraint in the 
 - In corresponding positive tests, explicitly state the positive precondition satisfying the constraint (e.g., target adapter is free / not assigned to any active task).
 - In addition to business rule tests, generate standard Negative (invalid input, missing parameter) and Boundary Value Analysis (BVA) test cases.
 - CRITICAL: The 'reqId' of every test case MUST EXACTLY match the requirement's 'id'.
-${corporateRulesPrompt}`;
+${corporateRulesPrompt}${customInstructionsPrompt}`;
 
       const chunkResults: any[][] = [];
       const CONCURRENCY = 2;
@@ -2115,7 +2212,11 @@ ${corporateRulesPrompt}`;
               );
               const chunkRes = await generateUnifiedAI({
                 systemPrompt: tcSystemPrompt,
-                userPrompt: `Lütfen aşağıdaki ${chunk.length} adet bütünleşik gereksinim maddesinin HER BİRİ için:\n1. Gereksinim tanımındaki TÜM farklı fonksiyonları ve işlemleri (ekleme, listeleme, detay görüntüleme, güncelleme, silme, sözlük/tip yönetimi vb.) tek tek tespit edin ve HER BİRİ İÇİN AYRI BİR POZİTİF TEST SENARYOSU ÜRETİN ('[Pozitif] {reqId} - Fonksiyon N: {Operasyon Adı}').\n2. Gereksinim metnindeki TÜM İŞ KURALLARINI, KISITLARI VE YASAKLAMALARI (örneğin: 'aktif göreve bağlı adaptör silinemez', 'onaylanmamış kayıt düzenlenemez', 'bakiye yetersizse işlem yapılamaz' vb.) tespit edin ve HER BİR İŞ KURALI İÇİN ÖZEL BİR NEGATİF TEST SENARYOSU ÜRETİN ('[Negatif / İş Kuralı] {reqId} - {Kural Adı}').\n3. Hata ve sınır durumları için genel Negatif ve Sınır (BVA) senaryoları da üretin.\n4. 'reqId' değeri verilen gereksinimin 'id' değeri ile BİREBİR AYNI olmalıdır.\n\nGereksinimler:\n${JSON.stringify(chunk, null, 2)}`,
+                userPrompt: `Lütfen aşağıdaki ${chunk.length} adet bütünleşik gereksinim maddesinin HER BİRİ için:\n1. Gereksinim tanımındaki TÜM farklı fonksiyonları ve işlemleri (ekleme, listeleme, detay görüntüleme, güncelleme, silme, sözlük/tip yönetimi vb.) tek tek tespit edin ve HER BİRİ İÇİN AYRI BİR POZİTİF TEST SENARYOSU ÜRETİN ('[Pozitif] {reqId} - Fonksiyon N: {Operasyon Adı}').\n2. Gereksinim metnindeki TÜM İŞ KURALLARINI, KISITLARI VE YASAKLAMALARI (örneğin: 'aktif göreve bağlı adaptör silinemez', 'onaylanmamış kayıt düzenlenemez', 'bakiye yetersizse işlem yapılamaz' vb.) tespit edin ve HER BİR İŞ KURALI İÇİN ÖZEL BİR NEGATİF TEST SENARYOSU ÜRETİN ('[Negatif / İş Kuralı] {reqId} - {Kural Adı}').\n3. Hata ve sınır durumları için genel Negatif ve Sınır (BVA) senaryoları da üretin.\n4. 'reqId' değeri verilen gereksinimin 'id' değeri ile BİREBİR AYNI olmalıdır.${
+                  customInstrTrimmed
+                    ? `\n5. ÖZEL AI TEST TALİMATI (MUTLAKA DİKKATE ALINMALIDIR): "${customInstrTrimmed}". Bu talimattaki tüm kural, durum kodu, parametre ve sınırları ilgili senaryolara yansıtın.`
+                    : ''
+                }\n\nGereksinimler:\n${JSON.stringify(chunk, null, 2)}`,
                 temperature: 0.25,
                 geminiSchema: {
                   type: Type.ARRAY,
@@ -2368,7 +2469,7 @@ ${corporateRulesPrompt}`;
       processedRequirements,
       allTestCases,
       req.body?.config?.language || 'tr',
-      { action: 'initial' }
+      { action: 'initial', customInstructions: config?.customInstructions }
     );
 
     const result = {
@@ -2405,7 +2506,7 @@ ${corporateRulesPrompt}`;
         fallbackReq,
         fallbackTCs,
         req.body?.config?.language || 'tr',
-        { action: 'initial' }
+        { action: 'initial', customInstructions: req.body?.config?.customInstructions }
       );
       return res.json({
         requirements: fallbackReq,

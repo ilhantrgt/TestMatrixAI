@@ -623,17 +623,22 @@ export const RequirementInput: React.FC<RequirementInputProps> = ({
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
             <span>{isEn ? 'Custom AI Prompt Guidance:' : 'Özel AI Test Talimatı (Prompt):'}</span>
           </label>
-          <input
-            type="text"
+          <textarea
+            rows={3}
             value={config.customInstructions || ''}
             onChange={(e) => onChangeConfig({ ...config, customInstructions: e.target.value })}
             placeholder={
               isEn
-                ? "e.g., 'Include HTTP 200/400 status codes in steps', 'Detail boundary limits for salary field'..."
-                : "Örn: 'Tüm test adımlarına HTTP 200/400 status kodlarını ekle', 'Maaş alanı sınır değerlerini detaylandır'..."
+                ? "e.g., 'For AD-F01, IP and port (1-65535) are mandatory. For AD-F03, check active task cannot be deleted and returns HTTP 409.'\n'Include HTTP 200/400 status codes and validation popups in steps'..."
+                : "Örn: 'AD-F01 için IP ve port (1-65535) formatı zorunludur. AD-F03 için aktif görev silinemez kuralı ve 409 kodu kontrol edilmeli.'\n'Tüm silme işlemlerinde onay popupı ve HTTP 200/400 kodları test adımlarına eklensin'..."
             }
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+            className="w-full bg-slate-900/90 border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 resize-y leading-relaxed"
           />
+          <p className="text-[11px] text-amber-300/70">
+            {isEn
+              ? '💡 Entered rules, parameters, and status codes are strictly enforced across LLM & ISTQB test case synthesis.'
+              : '💡 Girilen özel kurallar, hata kodları ve kısıtlar tüm LLM ve ISTQB test senaryolarına birebir uygulanır.'}
+          </p>
         </div>
       )}
 

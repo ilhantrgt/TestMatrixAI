@@ -5,6 +5,7 @@ export interface LastUpdateContext {
   reqId?: string;
   addedCount?: number;
   lastTestCaseTitle?: string;
+  customInstructions?: string;
 }
 
 /**
@@ -152,6 +153,21 @@ export function generateEngineeringRecommendations(
   ).toLowerCase();
 
   const recommendations: string[] = [];
+
+  // Custom AI Test Instruction Compliance Bullet
+  if (lastUpdateContext?.customInstructions && lastUpdateContext.customInstructions.trim().length > 0) {
+    const rawInstr = lastUpdateContext.customInstructions.trim();
+    const shortInstr = rawInstr.length > 70 ? rawInstr.slice(0, 70) + '...' : rawInstr;
+    if (isTr) {
+      recommendations.push(
+        `Özel AI Test Talimatı Uyumu: Kullanıcı tarafından girilen özel yönerge ("${shortInstr}") test senaryolarının kurgusuna, adımlarına ve kontrol kriterlerine öncelikli kural olarak entegre edildi.`
+      );
+    } else {
+      recommendations.push(
+        `Custom AI Prompt Compliance: User prompt instructions ("${shortInstr}") were directly prioritized and incorporated into test scenarios and verification steps.`
+      );
+    }
+  }
 
   // 1. Live Update Bullet (if triggered by adding/refining a test case)
   if (lastUpdateContext && lastUpdateContext.reqId) {

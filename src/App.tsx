@@ -854,7 +854,7 @@ export default function App() {
               finalReqs,
               resequencedTestCases,
               generationConfig.language,
-              { action: 'initial' }
+              { action: 'initial', customInstructions: effectiveConfig.customInstructions }
             );
 
       setRequirements(finalReqs);
