@@ -605,6 +605,221 @@ function capitalizeText(str: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
+function capitalizeWords(str: string): string {
+  if (!str) return '';
+  return str
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+export interface RequirementScreenContext {
+  screenNominative: string;
+  screenDative: string;
+  screenAblative: string;
+  screenLocative: string;
+  moduleName: string;
+  step1NavigationTr: string;
+  step1NavigationEn: string;
+  customStatusCodes: string[];
+  customActionSpecified: boolean;
+}
+
+export function buildTurkishScreenGrammar(screen: string): {
+  nominative: string;
+  dative: string;
+  ablative: string;
+  locative: string;
+} {
+  const s = screen.trim();
+  const lower = s.toLowerCase();
+
+  // Ends with ekranı / sayfası / paneli
+  if (lower.endsWith('ekranı') || lower.endsWith('sayfası') || lower.endsWith('paneli')) {
+    return {
+      nominative: s,
+      dative: `${s}na`,
+      ablative: `${s}ndan`,
+      locative: `${s}nda`,
+    };
+  }
+  // Ends with arayüzü / menüsü / görünümü
+  if (lower.endsWith('arayüzü') || lower.endsWith('menüsü') || lower.endsWith('görünümü')) {
+    return {
+      nominative: s,
+      dative: `${s}ne`,
+      ablative: `${s}nden`,
+      locative: `${s}nde`,
+    };
+  }
+  // Ends with ekran / panel
+  if (lower.endsWith('ekran') || lower.endsWith('panel')) {
+    return {
+      nominative: `${s}ı`,
+      dative: `${s}ına`,
+      ablative: `${s}ından`,
+      locative: `${s}ında`,
+    };
+  }
+  // Fallback
+  return {
+    nominative: `${s} Ekranı`,
+    dative: `${s} ekranına`,
+    ablative: `${s} ekranından`,
+    locative: `${s} ekranında`,
+  };
+}
+
+export function deriveRequirementScreenAndModule(
+  reqId: string,
+  title: string,
+  desc: string,
+  category: string,
+  customInstructions?: string,
+  isTurkish: boolean = true
+): RequirementScreenContext {
+  const reqLower = String(reqId || '').toLowerCase().trim();
+  const rawCustom = String(customInstructions || '').trim();
+
+  // 1. Check custom instructions for explicit screen/interface or navigation directives
+  let explicitScreen = '';
+  let explicitActionPhrase = '';
+  const customStatusCodes: string[] = [];
+
+  if (rawCustom) {
+    const hasAnySpecificReq = /\b(ad-f\d+|req-\d+|td-\d+|fr-\d+)\b/i.test(rawCustom);
+    const mentionsThisReq = reqLower && rawCustom.toLowerCase().includes(reqLower);
+
+    // If specific reqs are mentioned in custom instructions, only apply clauses mentioning this req
+    const clauses = rawCustom.split(/(?<=[.!?;\n])\s*/);
+    const applicableClauses =
+      hasAnySpecificReq && !mentionsThisReq
+        ? []
+        : mentionsThisReq
+        ? clauses.filter(
+            (c) =>
+              c.toLowerCase().includes(reqLower) ||
+              !/\b(ad-f\d+|req-\d+|td-\d+|fr-\d+)\b/i.test(c)
+          )
+        : clauses;
+
+    const relevantText = applicableClauses.join(' ');
+
+    // Extract status codes if present (e.g., 409, 400, 422)
+    const codeMatches = relevantText.match(/\b(200|201|204|400|401|403|404|409|422|500)\b/g);
+    if (codeMatches) {
+      codeMatches.forEach((c) => {
+        if (!customStatusCodes.includes(c)) customStatusCodes.push(c);
+      });
+    }
+
+    // Match screen/page phrase: e.g. "Adaptör ekranı", "Adaptörler ekranı", "Adaptör yönetim ekranı", "Ödeme Sayfası"
+    const screenMatch = relevantText.match(
+      /(?:^|[\s,.\'\"\(])([A-ZÇĞİÖŞÜa-zçğıöşü0-9_\-\s]{2,30}?)\s*(ekranı|ekranından|ekranına|ekranında|arayüzü|arayüzünden|arayüzüne|sayfası|sayfasından|sayfasına|paneli|menüsü)/i
+    );
+    if (screenMatch) {
+      let cand = screenMatch[1].trim();
+      // Clean leading ID and noise words (e.g. "AD-F01 nolu gereksinim Adaptör" -> "Adaptör")
+      cand = cand
+        .replace(
+          /^(?:[A-Z0-9_\-]{2,15}\s*(?:nolu|numaralı|sayılı)?\s*(?:gereksinim|madde)?|bu|ilgili|şunun|bunun|her|tüm|yeni|nolu\s+gereksinim|olarak|gereksinim|için)\s+/i,
+          ''
+        )
+        .replace(
+          /^(?:nolu|numaralı|sayılı)?\s*(?:gereksinim|madde)?\s+/i,
+          ''
+        )
+        .trim();
+      if (
+        cand &&
+        cand.length > 1 &&
+        !/^(?:case|test|durum|adım|bilgi|hata)$/i.test(cand)
+      ) {
+        const suffixType = screenMatch[2].toLowerCase();
+        const suffix = suffixType.startsWith('arayüz')
+          ? 'Arayüzü'
+          : suffixType.startsWith('sayfa')
+          ? 'Sayfası'
+          : suffixType.startsWith('panel')
+          ? 'Paneli'
+          : suffixType.startsWith('menü')
+          ? 'Menüsü'
+          : 'Ekranı';
+        explicitScreen = `${capitalizeWords(cand)} ${suffix}`;
+      }
+    }
+
+    // Match navigation action intent: e.g. "Adaptör ekranına girilip işlem yapıldığı", "girilip işlem yapılsın", "üzerinden yapılır"
+    if (
+      /girilip|üzerinden\s+yapılır|ekranına\s+gidilip|sayfası\s+açılarak|arayüzüne\s+erişilip/i.test(
+        relevantText
+      )
+    ) {
+      explicitActionPhrase = 'girilip';
+    }
+  }
+
+  // 2. If no explicit screen in custom instructions, derive from Requirement Title & Description
+  let derivedEntity = '';
+  if (!explicitScreen) {
+    let cleanTitle = String(title || '')
+      .replace(/^[A-Z0-9_\-\s\.:]{2,15}(?:\s*[:-]\s*|\s+)/i, '')
+      .trim();
+    if (cleanTitle.includes(':')) {
+      cleanTitle = cleanTitle.split(':')[0].trim();
+    }
+    // Remove action verbs
+    cleanTitle = cleanTitle
+      .replace(
+        /\s+(?:ekleme|eklenmesi|eklenmesine|silme|silinmesi|silinmesini|güncelleme|güncellenmesi|düzenleme|listeleme|listelenmesi|arama|sorgulama|görüntüleme|yükleme|yüklenmesi|tanımlama|tanımlanması|yönetimi|yönetim|kontrolü|kontrol|upload|create|creation|delete|deletion|update|search|view)\s*$/i,
+        ''
+      )
+      .trim();
+
+    if (cleanTitle && cleanTitle.length > 1) {
+      derivedEntity = cleanTitle;
+    } else if (category && category !== 'Fonksiyonel' && category !== 'Genel') {
+      derivedEntity = category;
+    } else {
+      derivedEntity = 'İlgili İşlem';
+    }
+  }
+
+  const baseScreen = explicitScreen || `${capitalizeWords(derivedEntity)} Ekranı`;
+  const grammar = buildTurkishScreenGrammar(baseScreen);
+
+  // Derive module name (e.g. "Adaptör Yönetimi", "Adaptör Ekranı")
+  let moduleName = explicitScreen
+    ? explicitScreen
+    : derivedEntity && derivedEntity !== 'İlgili İşlem'
+    ? `${capitalizeWords(derivedEntity)} Yönetimi`
+    : category && category !== 'Fonksiyonel'
+    ? category
+    : 'İşlem Yönetimi';
+
+  // Construct Step 1 Navigation
+  let step1NavigationTr = '';
+  if (explicitActionPhrase === 'girilip' || rawCustom.includes('girilip')) {
+    step1NavigationTr = `1. ${grammar.dative} girilip ilgili işlem arayüzünü açın.`;
+  } else {
+    step1NavigationTr = `1. ${grammar.dative} gidin.`;
+  }
+
+  const step1NavigationEn = `1. Navigate to ${grammar.nominative} view.`;
+
+  return {
+    screenNominative: grammar.nominative,
+    screenDative: grammar.dative,
+    screenAblative: grammar.ablative,
+    screenLocative: grammar.locative,
+    moduleName,
+    step1NavigationTr,
+    step1NavigationEn,
+    customStatusCodes,
+    customActionSpecified: Boolean(explicitScreen || explicitActionPhrase),
+  };
+}
+
 interface DetectedBusinessConstraint {
   ruleTitleTr: string;
   ruleTitleEn: string;
@@ -627,10 +842,13 @@ function extractBusinessRuleConstraints(
   title: string,
   desc: string,
   mod: string,
-  isTurkish: boolean
+  isTurkish: boolean,
+  screenContext?: RequirementScreenContext
 ): DetectedBusinessConstraint[] {
   const text = `${title} ${desc}`.toLowerCase();
   const rules: DetectedBusinessConstraint[] = [];
+  const screenAblative = screenContext?.screenAblative || `${mod} ekranından`;
+  const screenNominative = screenContext?.screenNominative || mod;
 
   // 1. Active task / process / job dependency prevents deletion ("aktif göreve bağlı adaptör silinemez")
   if (
@@ -650,14 +868,14 @@ function extractBusinessRuleConstraints(
       preconditionTr: `Hedef adaptör sistemde kayıtlı ve en az bir adet 'Aktif' veya 'İşleniyor' statüsündeki göreve bağlı/atanmış durumda olmalıdır.`,
       preconditionEn: `Target adapter must be assigned to at least one task with status 'Active' or 'In Progress'.`,
       stepsTr: [
-        `1. ${mod} yönetim arayüzünden aktif bir göreve atanmış olan hedef adaptörün satırını bulun ve durumunu inceleyin.`,
+        `1. ${screenAblative} aktif bir göreve atanmış olan hedef adaptörün satırını bulun ve durumunu inceleyin.`,
         `2. Adaptör satırındaki 'Sil' veya 'Kaldır' aksiyon butonuna tıklayın.`,
         `3. Ekrana gelen silme onay diyalog kutusunda 'Silmeyi Onayla' butonuna tıklayarak işlemi tetikleyin.`,
         `4. Sistemin silme işlemini derhal engellediğini ve kullanıcıya 'Aktif göreve bağlı adaptör silinemez' şeklinde açıklayıcı iş kuralı uyarı mesajı sunduğunu gözlemleyin.`,
         `5. Adaptörün veritabanından ve arayüz listesinden silinmediğini, aktif görevle ilişkisinin korunduğunu doğrulayın.`,
       ],
       stepsEn: [
-        `1. Locate the adapter currently linked to an active task in ${mod} view.`,
+        `1. Locate the adapter currently linked to an active task in ${screenNominative} view.`,
         `2. Click the 'Delete' action button for the adapter.`,
         `3. Confirm deletion in the confirmation prompt.`,
         `4. Verify system blocks the deletion request and presents explicit business rule error: 'Cannot delete adapter linked to active task'.`,
@@ -700,13 +918,13 @@ function extractBusinessRuleConstraints(
       preconditionTr: `Sistemde test edilecek kayıt '${condName}' durumunda bulunmalıdır.`,
       preconditionEn: `Target record must be in '${condName}' state.`,
       stepsTr: [
-        `1. ${mod} ekranından ${condName} niteliğindeki kaydı seçin.`,
+        `1. ${screenAblative} ${condName} niteliğindeki kaydı seçin.`,
         `2. 'Sil' butonuna tıklayın ve işlemi onaylayın.`,
         `3. Sistemin işlemi engellediğini ve '${condName} silinemez' kural ihlali uyarısı gösterdiğini gözlemleyin.`,
         `4. Kaydın sistemden kaldırılmadığını teyit edin.`,
       ],
       stepsEn: [
-        `1. Select record matching ${condName}.`,
+        `1. In ${screenNominative} view, select record matching ${condName}.`,
         `2. Click delete and confirm.`,
         `3. Verify action is blocked with error message.`,
         `4. Confirm record is not deleted.`,
@@ -749,13 +967,13 @@ function extractBusinessRuleConstraints(
       preconditionTr: `Hedef kayıt '${condName}' statüsünde olmalıdır.`,
       preconditionEn: `Target record must be in '${condName}' state.`,
       stepsTr: [
-        `1. ${mod} ekranından ${condName} durumundaki kaydı seçip 'Düzenle'ye tıklayın.`,
+        `1. ${screenAblative} ${condName} durumundaki kaydı seçip 'Düzenle'ye tıklayın.`,
         `2. Parametre değerlerini değiştirmeyi deneyin ve 'Kaydet'e tıklayın.`,
         `3. Sistemin düzenlemeyi engellediğini ve açıklayıcı hata mesajı verdiğini doğrulayın.`,
         `4. Orijinal verilerin değişmeden korunduğunu kontrol edin.`,
       ],
       stepsEn: [
-        `1. Select item with state ${condName} and click edit.`,
+        `1. In ${screenNominative} view, select item with state ${condName} and click edit.`,
         `2. Attempt to modify parameters and submit.`,
         `3. Verify modification is rejected with business rule error.`,
         `4. Confirm original values are unchanged.`,
@@ -792,7 +1010,9 @@ function generateDeterministicTestCasesForReq(
   const reqId = req.id || `REQ-${String(index + 1).padStart(3, '0')}`;
   const title = req.title || `Gereksinim ${index + 1}`;
   const desc = req.description || title;
-  const mod = req.category || 'Fonksiyonel Modül';
+  const customInstr = String(config?.customInstructions || '').trim();
+  const screenCtx = deriveRequirementScreenAndModule(reqId, title, desc, req.category, customInstr, isTurkish);
+  const mod = screenCtx.moduleName;
 
   const selectedFunctional: string[] = Array.isArray(config?.selectedFunctionalTypes)
     ? config.selectedFunctionalTypes
@@ -844,7 +1064,6 @@ function generateDeterministicTestCasesForReq(
   let tcSeq = 1;
 
   // Operational Capability Detector: Identifies distinct CRUD & functional capabilities mentioned in title + desc + customInstructions
-  const customInstr = String(config?.customInstructions || '').trim();
   const textToScan = `${title} ${desc} ${customInstr}`.toLowerCase();
   const hasActiveTaskConstraint =
     textToScan.includes('aktif göreve bağlı') ||
@@ -855,7 +1074,7 @@ function generateDeterministicTestCasesForReq(
 
   // Detect explicit business rules & prohibition constraints (combining description and custom prompt guidance)
   const combinedRuleText = customInstr ? `${desc}\n[Özel Talimat]: ${customInstr}` : desc;
-  const detectedRules = extractBusinessRuleConstraints(title, combinedRuleText, mod, isTurkish);
+  const detectedRules = extractBusinessRuleConstraints(title, combinedRuleText, mod, isTurkish, screenCtx);
 
   const detectedOps: Array<{
     opNameTr: string;
@@ -893,14 +1112,14 @@ function generateDeterministicTestCasesForReq(
       descTr: `Gereksinim kapsamındaki adaptör ve kayıtların tüm zorunlu parametreleriyle (Ad, Tip, Sürüm) sisteme hatasız yüklendiğinin ve veritabanına kaydedildiğinin doğrulanması.`,
       descEn: `Verification that adapters and records are successfully uploaded and created with mandatory attributes (Name, Type, Version).`,
       stepsTr: [
-        `1. ${mod} ilgili yönetim veya tanımlama arayüzüne gidin.`,
+        screenCtx.step1NavigationTr,
         `2. 'Yeni Ekle' veya 'Yükle' butonuna tıklayın.`,
         `3. Ad, tip, sürüm ve zorunlu parametre bilgilerini geçerli test verisiyle doldurun.`,
         `4. 'Kaydet / Yükle' butonuna basarak işlemi onaylayın.`,
-        `5. İşlemin başarıyla tamamlandığını ve yeni kaydın veritabanına eklenerek listede görüntülendiğini doğrulayın.`,
+        `5. İşlemin başarıyla tamamlandığını ve yeni kaydın veritabanına eklenerek ${screenCtx.screenLocative} görüntülendiğini doğrulayın.`,
       ],
       stepsEn: [
-        `1. Open ${mod} management view.`,
+        screenCtx.step1NavigationEn,
         `2. Click 'Add New' or 'Upload'.`,
         `3. Populate mandatory fields (Name, Type, Version) with valid inputs.`,
         `4. Submit the form.`,
@@ -945,14 +1164,14 @@ function generateDeterministicTestCasesForReq(
       descTr: `Sistemde kayıtlı nesnelerin/adaptörlerin ad, tip ve sürüm bilgileriyle doğru kolonlarda listelendiğinin, arama ve filtreleme fonksiyonlarının çalıştığının doğrulanması.`,
       descEn: `Verification that stored records/adapters are accurately listed with correct columns and search features.`,
       stepsTr: [
-        `1. ${mod} modülü liste ve sorgulama arayüzüne erişin.`,
+        `1. ${screenCtx.screenDative} erişim sağlayın ve liste/sorgulama arayüzünü açın.`,
         `2. Veri tablosundaki sütunların (Ad, Tip, Sürüm, Durum vb.) eksiksiz görüntülendiğini kontrol edin.`,
         `3. Arama/filtreleme kutusuna bilinen bir kayıt adı veya tip bilgisini girin.`,
         `4. Filtrele butonuna tıklayın veya aramayı tetikleyin.`,
         `5. Tabloda sadece arama kriterine uygun verilerin listelendiğini doğrulayın.`,
       ],
       stepsEn: [
-        `1. Open ${mod} listing view.`,
+        `1. Open ${screenCtx.screenNominative} listing view.`,
         `2. Inspect data grid headers and rows.`,
         `3. Enter search string in search box.`,
         `4. Trigger search/filter.`,
@@ -995,13 +1214,13 @@ function generateDeterministicTestCasesForReq(
       descTr: `Listeden seçilen bir adaptörün detay sayfasına girildiğinde tüm özniteliklerin (ad, tip, sürüm, meta veriler) eksiksiz ve doğru görüntülendiğinin doğrulanması.`,
       descEn: `Verification that selecting an adapter displays all its detailed attributes (name, type, version, metadata) correctly.`,
       stepsTr: [
-        `1. ${mod} liste ekranından hedef kaydı seçin.`,
+        `1. ${screenCtx.screenAblative} hedef kaydı seçin.`,
         `2. Satır üzerindeki 'Detay Görüntüle' butonuna veya kayıt adına tıklayın.`,
         `3. Açılan detay sayfasındaki/penceresindeki alanları inceleyin.`,
         `4. Ad, Tip, Sürüm, oluşturulma tarihi ve parametre detaylarının veritabanı kaydıyla birebir eşleştiğini doğrulayın.`,
       ],
       stepsEn: [
-        `1. Select record in list view.`,
+        `1. Select record in ${screenCtx.screenNominative}.`,
         `2. Click 'View Detail'.`,
         `3. Inspect detail view fields.`,
         `4. Verify parameters match database state.`,
@@ -1041,14 +1260,14 @@ function generateDeterministicTestCasesForReq(
       descTr: `Var olan bir adaptörün ad, tip veya sürüm bilgilerinin güncellenip kaydedildiğinde değişikliklerin veritabanına ve arayüze yansıdığının doğrulanması.`,
       descEn: `Verification of modifying adapter attributes and ensuring updated values persist in DB and UI.`,
       stepsTr: [
-        `1. ${mod} ekranından güncellenecek kaydı seçip 'Düzenle' butonuna tıklayın.`,
+        `1. ${screenCtx.screenAblative} güncellenecek kaydı seçip 'Düzenle' butonuna tıklayın.`,
         `2. Sürüm veya parametre bilgisini yeni geçerli bir değerle değiştirin.`,
         `3. 'Güncelle / Kaydet' butonuna basarak değişiklikleri onaylayın.`,
         `4. Başarı bildirim mesajını gözlemleyin.`,
         `5. Liste ve detay ekranlarında güncellenmiş yeni değerlerin görüntülendiğini teyit edin.`,
       ],
       stepsEn: [
-        `1. Select item and click 'Edit'.`,
+        `1. In ${screenCtx.screenNominative}, select item and click 'Edit'.`,
         `2. Update type or version attribute to new valid value.`,
         `3. Click 'Update/Save'.`,
         `4. Observe success notification.`,
@@ -1092,14 +1311,14 @@ function generateDeterministicTestCasesForReq(
         descTr: `Herhangi bir aktif göreve atanmamış (boşta/serbest) bir adaptörün kullanıcı onayı ile sistemden başarıyla silindiğinin doğrulanması.`,
         descEn: `Verification that an adapter not assigned to any active task is deleted cleanly upon confirmation.`,
         stepsTr: [
-          `1. ${mod} liste ekranından aktif bir göreve atanmamış (boşta/serbest) hedef adaptörü seçin.`,
+          `1. ${screenCtx.screenAblative} aktif bir göreve atanmamış (boşta/serbest) hedef adaptörü seçin.`,
           `2. Satır üzerindeki 'Sil' aksiyon butonuna tıklayın.`,
           `3. Ekrana gelen silme onay diyalog kutusundaki (Silmek istediğinizden emin misiniz?) 'Evet, Sil' butonuna tıklayın.`,
           `4. İşlem onay mesajını (Kayıt başarıyla silindi) gözlemleyin.`,
           `5. Silinen adaptörün listeden ve veritabanından kalıcı olarak kaldırıldığını doğrulayın.`,
         ],
         stepsEn: [
-          `1. Locate unlinked/free adapter in ${mod} grid.`,
+          `1. In ${screenCtx.screenNominative}, locate unlinked/free adapter in grid.`,
           `2. Click 'Delete' action button.`,
           `3. Confirm deletion in prompt.`,
           `4. Observe success notification.`,
@@ -1130,13 +1349,13 @@ function generateDeterministicTestCasesForReq(
         descTr: `Silinmek istenen bir adaptörün kullanıcı onayı verildikten sonra veritabanından ve arayüz listesinden kalıcı olarak silindiğinin doğrulanması.`,
         descEn: `Verification that confirming deletion removes the adapter from database and UI grid.`,
         stepsTr: [
-          `1. ${mod} liste ekranından silinecek adaptörün 'Sil' butonuna tıklayın.`,
+          `1. ${screenCtx.screenAblative} silinecek adaptörün 'Sil' butonuna tıklayın.`,
           `2. Ekrana gelen silme onay diyalog kutusundaki (Silmek istediğinizden emin misiniz?) 'Evet, Sil' butonuna tıklayın.`,
           `3. İşlem onay mesajını (Kayıt silindi) gözlemleyin.`,
           `4. Silinen kaydın artık listede veya arama sonuçlarında görünmediğini doğrulayın.`,
         ],
         stepsEn: [
-          `1. Click 'Delete' button on target record.`,
+          `1. In ${screenCtx.screenNominative}, click 'Delete' button on target record.`,
           `2. Confirm deletion prompt.`,
           `3. Observe deletion success notification.`,
           `4. Verify record is removed from grid.`,
@@ -1177,14 +1396,14 @@ function generateDeterministicTestCasesForReq(
         `1. Merkezi Sözlük / Parametre Yönetim ekranına erişin.`,
         `2. 'Yeni Tip Ekle' butonuna tıklayın.`,
         `3. Yeni tip kodunu ve açıklamasını girip kaydedin.`,
-        `4. ${mod} ekleme/düzenleme formuna dönerek 'Tip' açılır menüsünü kontrol edin.`,
+        `4. ${screenCtx.screenNominative} ekleme/düzenleme formuna dönerek 'Tip' açılır menüsünü kontrol edin.`,
         `5. Yeni tanımlanan tipin listede seçilebilir durumda olduğunu ve seçilerek kaydedildiğini doğrulayın.`,
       ],
       stepsEn: [
         `1. Open Central Dictionary management page.`,
         `2. Click 'Add New Type'.`,
         `3. Enter new type code and label, then save.`,
-        `4. Navigate to ${mod} creation form and inspect Type dropdown.`,
+        `4. Navigate to ${screenCtx.screenNominative} creation form and inspect Type dropdown.`,
         `5. Verify new type is selectable.`,
       ],
       expTr: [
@@ -1256,7 +1475,7 @@ function generateDeterministicTestCasesForReq(
       steps: isTurkish
         ? isPayment
           ? [
-              `1. ${mod} ekranına veya ödeme/sepet sayfasına erişim sağlayın.`,
+              `1. ${screenCtx.screenDative} veya ödeme/sepet sayfasına erişim sağlayın.`,
               `2. Geçerli işlem tutarını ve gerekli ödeme/kart parametrelerini girin.`,
               `3. İşlem onay butonuna (Ödeme Yap / Onayla) tıklayın.`,
               `4. Güvenlik/SMS doğrulama adımını geçerli kod ile tamamlayın.`,
@@ -1271,14 +1490,14 @@ function generateDeterministicTestCasesForReq(
               `5. Kullanıcı oturumunun açıldığını ve yetkili ana sayfanın yüklendiğini doğrulayın.`,
             ]
           : [
-              `1. ${mod} modülü ilgili yönetim ekranına erişim sağlayın.`,
+              screenCtx.step1NavigationTr,
               `2. ${title} için gerekli tüm geçerli parametreleri ve test verilerini forma girin.`,
               `3. Kaydet/Gönder/Tetikle butonuna tıklayın.`,
               `4. Sistem arayüzündeki geri bildirim bildirimini ve yükleme durumunu izleyin.`,
               `5. İşlemin başarıyla sonuçlandığını ve veritabanı kaydının güncellendiğini doğrulayın.`,
             ]
         : [
-            `1. Navigate to ${mod} screen.`,
+            screenCtx.step1NavigationEn,
             `2. Enter all mandatory and valid parameters for ${title}.`,
             `3. Click submit/confirm.`,
             `4. Observe interface feedback.`,
@@ -1302,7 +1521,7 @@ function generateDeterministicTestCasesForReq(
               `5. Güvenli oturum anahtarı (JWT/Token) üretilmeli ve dashboard açılmalıdır.`,
             ]
           : [
-              `1. ${mod} arayüzü ve işlem bileşenleri eksiksiz yüklenmelidir.`,
+              `1. ${screenCtx.screenNominative} arayüzü ve işlem bileşenleri eksiksiz yüklenmelidir.`,
               `2. Girilen test parametreleri geçerli kabul edilmelidir.`,
               `3. İşlem arka planda başarıyla tetiklenmelidir.`,
               `4. Yükleme göstergesi tamamlanmalı ve başarı bildirim bannerı çıkmalıdır.`,
@@ -1368,14 +1587,14 @@ function generateDeterministicTestCasesForReq(
       : 'System active and user on transaction page.',
     steps: isTurkish
       ? [
-          `1. ${mod} modülü ilgili işlem ekranını açın.`,
+          `1. ${screenCtx.screenDative} gidin ve ilgili işlem formunu açın.`,
           `2. Zorunlu alanları boş bırakın veya geçersiz/hatalı formatta test girdisi sağlayın.`,
           `3. İşlem onay butonuna (Kaydet/Gönder/Öde) tıklayın.`,
           `4. Ekran üzerinde beliren doğrulama uyarılarını ve alan bazlı hata mesajlarını inceleyin.`,
           `5. Hatalı işlemin veritabanına veya harici servislere yansıtılmadığını kontrol edin.`,
         ]
       : [
-          `1. Access ${mod} screen.`,
+          `1. Access ${screenCtx.screenNominative} screen.`,
           `2. Leave mandatory fields blank or supply malformed test values.`,
           `3. Click submit.`,
           `4. Check field validation warnings and system alert.`,
@@ -1423,13 +1642,13 @@ function generateDeterministicTestCasesForReq(
         : 'System active with boundary rules enabled.',
       steps: isTurkish
         ? [
-            `1. ${mod} modülü giriş formuna erişin.`,
+            `1. ${screenCtx.screenDative} gidin ve parametre giriş formunu açın.`,
             `2. İlgili parametre için minimum sınır değerini (Min ve Min - 1) test edin.`,
             `3. İlgili parametre için maksimum sınır değerini (Maks ve Maks + 1) test edin.`,
             `4. Sınır içi değerlerin kabul edildiğini, sınır dışı değerlerin uygun hata ile reddedildiğini izleyin.`,
           ]
         : [
-            `1. Open form in ${mod}.`,
+            `1. Open form in ${screenCtx.screenNominative}.`,
             `2. Test minimum boundary values (Min and Min - 1).`,
             `3. Test maximum boundary values (Max and Max + 1).`,
             `4. Verify that within-range values pass and out-of-range values fail with clear messages.`,
@@ -1475,13 +1694,13 @@ function generateDeterministicTestCasesForReq(
         : 'Security middleware and RBAC enabled.',
       steps: isTurkish
         ? [
-            `1. Oturumu kapatmış veya yetkisiz bir rol profiliyle ${mod} işlem endpoint/sayfasına doğrudan erişmeyi deneyin.`,
+            `1. Oturumu kapatmış veya yetkisiz bir rol profiliyle ${screenCtx.screenDative} doğrudan erişmeyi deneyin.`,
             `2. Sistemin 401 Unauthorized veya 403 Forbidden yanıtı verdiğini doğrulayın.`,
             `3. Yetkili kullanıcı ile giriş yapıp form alanlarına XSS (<script>alert(1)</script>) ve SQLi test girdisi sağlayın.`,
             `4. Sistemin güvenli kaçış (sanitize) uyguladığını ve komut çalıştırmadığını doğrulayın.`,
           ]
         : [
-            `1. Attempt unauthorized access to ${mod}.`,
+            `1. Attempt unauthorized access to ${screenCtx.screenNominative}.`,
             `2. Confirm 401/403 response.`,
             `3. Supply sanitized security injection strings into fields.`,
             `4. Verify proper sanitization without execution.`,
@@ -1527,13 +1746,13 @@ function generateDeterministicTestCasesForReq(
         : 'APM monitoring active in test environment.',
       steps: isTurkish
         ? [
-            `1. ${mod} modülü ilgili işlem çağrısını başlatın.`,
+            `1. ${screenCtx.screenDative} erişip ilgili işlem çağrısını başlatın.`,
             `2. Ağ trafiği analizöründe (DevTools / APM) TTFB ve toplam işlem süresini ölçün.`,
             `3. Eşzamanlı 10 test kullanıcısı ile işlemi paralel tetikleyin.`,
             `4. Tüm yanıtların hatasız 200 OK döndüğünü ve gecikme yaşanmadığını doğrulayın.`,
           ]
         : [
-            `1. Trigger ${mod} operation.`,
+            `1. Trigger ${screenCtx.screenNominative} operation.`,
             `2. Measure response latency.`,
             `3. Simulate concurrent requests.`,
             `4. Verify 200 OK and acceptable response latency.`,
@@ -1579,13 +1798,13 @@ function generateDeterministicTestCasesForReq(
         : 'System active and user authenticated.',
       steps: isTurkish
         ? [
-            `1. ${mod} ekranına erişin.`,
+            `1. ${screenCtx.screenDative} erişin.`,
             `2. İsteğe bağlı (opsiyonel) alanları da içeren alternatif geçerli veri seti girin.`,
             `3. İşlemi onaylayın.`,
             `4. Çıktıların ve veritabanı kayıtlarının eksiksiz olduğunu doğrulayın.`,
           ]
         : [
-            `1. Open ${mod}.`,
+            `1. Open ${screenCtx.screenNominative}.`,
             `2. Populate alternate valid inputs.`,
             `3. Submit.`,
             `4. Verify complete audit trail.`,
@@ -1722,14 +1941,14 @@ function generateDeterministicTestCasesForReq(
           : `System active with custom test preconditions prepared: "${customInstr.substring(0, 75)}".`,
         steps: isTurkish
           ? [
-              `1. ${mod} ekranını veya ilgili API uç noktasını açın.`,
+              screenCtx.step1NavigationTr,
               `2. Özel talimatta belirtilen parametre ve koşulları sağlayın: "${customInstr.substring(0, 90)}".`,
               `3. İşlem onay butonuna tıklayın veya API isteğini tetikleyin.`,
               `4. Sistemin yanıtını, dönen durum kodunu ve ekran geri bildirimini inceleyin.`,
               `5. Özel talimattaki tüm kontrol kriterlerinin eksiksiz sağlandığını doğrulayın.`,
             ]
           : [
-              `1. Open ${mod} view or API endpoint.`,
+              screenCtx.step1NavigationEn,
               `2. Provide parameters per custom instruction: "${customInstr.substring(0, 90)}".`,
               `3. Submit or trigger action.`,
               `4. Inspect system response, status code, and UI feedback.`,
@@ -2167,7 +2386,10 @@ app.post('/api/generate-test-cases', async (req, res) => {
           ? `\nCRITICAL MANDATORY INSTRUCTION 3 - USER CUSTOM PROMPT INSTRUCTIONS (Özel AI Test Talimatı):
 The user provided explicit test design directives:
 "${customInstrTrimmed}"
-You MUST strictly incorporate all rules, constraints, edge cases, parameters, status codes, and error messages specified in these custom instructions into the generated test cases. For any requirement specifically mentioned or affected by these instructions, generate dedicated test cases or adapt steps to strictly validate these exact rules!\n`
+You MUST strictly incorporate all screens, navigation steps, rules, constraints, edge cases, parameters, status codes (e.g. HTTP 409, 400), and error messages specified in these custom instructions into the generated test cases!
+- If the user specifies an explicit screen or interface (e.g. 'Adaptör ekranı', 'X ekranına girilip işlem yapılsın'), every test case Step 1 for that requirement MUST explicitly state navigating to or entering that exact screen (e.g., '1. Adaptör ekranına girilip ilgili işlem arayüzünü açın.'), NEVER generic 'Fonksiyonel yönetim arayüzü'!
+- Incorporate all specific error codes, button names, and confirmation dialogs requested by the user.
+- The 'module' field of every test case must be the actual domain module or screen name (e.g., 'Adaptör Yönetimi' or 'Adaptör Ekranı'), NEVER 'Fonksiyonel' or 'Genel'!\n`
           : '';
 
       const tcSystemPrompt = `You are a Senior Principal ISTQB Certified QA Test Engineer. Generate comprehensive test cases in ${
@@ -2214,7 +2436,7 @@ ${corporateRulesPrompt}${customInstructionsPrompt}`;
                 systemPrompt: tcSystemPrompt,
                 userPrompt: `Lütfen aşağıdaki ${chunk.length} adet bütünleşik gereksinim maddesinin HER BİRİ için:\n1. Gereksinim tanımındaki TÜM farklı fonksiyonları ve işlemleri (ekleme, listeleme, detay görüntüleme, güncelleme, silme, sözlük/tip yönetimi vb.) tek tek tespit edin ve HER BİRİ İÇİN AYRI BİR POZİTİF TEST SENARYOSU ÜRETİN ('[Pozitif] {reqId} - Fonksiyon N: {Operasyon Adı}').\n2. Gereksinim metnindeki TÜM İŞ KURALLARINI, KISITLARI VE YASAKLAMALARI (örneğin: 'aktif göreve bağlı adaptör silinemez', 'onaylanmamış kayıt düzenlenemez', 'bakiye yetersizse işlem yapılamaz' vb.) tespit edin ve HER BİR İŞ KURALI İÇİN ÖZEL BİR NEGATİF TEST SENARYOSU ÜRETİN ('[Negatif / İş Kuralı] {reqId} - {Kural Adı}').\n3. Hata ve sınır durumları için genel Negatif ve Sınır (BVA) senaryoları da üretin.\n4. 'reqId' değeri verilen gereksinimin 'id' değeri ile BİREBİR AYNI olmalıdır.${
                   customInstrTrimmed
-                    ? `\n5. ÖZEL AI TEST TALİMATI (MUTLAKA DİKKATE ALINMALIDIR): "${customInstrTrimmed}". Bu talimattaki tüm kural, durum kodu, parametre ve sınırları ilgili senaryolara yansıtın.`
+                    ? `\n5. ÖZEL AI TEST TALİMATI (MUTLAKA DİKKATE ALINMALIDIR): "${customInstrTrimmed}". Bu talimattaki tüm ekran isimleri (örn. Adaptör ekranı), girilip işlem yapılması yönlendirmeleri, durum kodları (HTTP 409 vb.) ve kısıtları test senaryolarının 1. adımına ve kontrol kriterlerine yansıtın. Asla 'Fonksiyonel arayüze gidin' gibi jenerik ifadeler kullanmayın.`
                     : ''
                 }\n\nGereksinimler:\n${JSON.stringify(chunk, null, 2)}`,
                 temperature: 0.25,
@@ -2383,9 +2605,30 @@ ${corporateRulesPrompt}${customInstructionsPrompt}`;
         ? tc.steps
         : ['1. İlgili arayüzü veya servisi çağırın.', '2. Gerekli parametreleri girin ve işlemi tetikleyin.'];
 
+      const derivedScreenCtx = matchedReq
+        ? deriveRequirementScreenAndModule(
+            matchedReq.id,
+            matchedReq.title,
+            matchedReq.description,
+            matchedReq.category,
+            config?.customInstructions,
+            isTurkish
+          )
+        : null;
+
       const normalizedSteps = rawSteps.map((s: string, sIdx: number) => {
-        const clean = String(s || '').trim();
-        return /^\d+[\.\)]\s*/.test(clean) ? clean : `${sIdx + 1}. ${clean}`;
+        let clean = String(s || '').trim();
+        clean = /^\d+[\.\)]\s*/.test(clean) ? clean : `${sIdx + 1}. ${clean}`;
+        if (sIdx === 0 && derivedScreenCtx) {
+          if (
+            /Fonksiyonel\s+(?:ilgili|yönetim|arayüz|ekran)/i.test(clean) ||
+            /ilgili yönetim veya tanımlama/i.test(clean) ||
+            /Fonksiyonel modülü/i.test(clean)
+          ) {
+            clean = derivedScreenCtx.step1NavigationTr;
+          }
+        }
+        return clean;
       });
 
       const overallExp = tc.expectedResult || 'İşlemin başarıyla tamamlandığı ve beklenen yanıtın alındığı doğrulanmalıdır.';
@@ -2397,11 +2640,20 @@ ${corporateRulesPrompt}${customInstructionsPrompt}`;
       }
       usedTcIds.add(tcId);
 
+      let effectiveModule = tc.module;
+      if (!effectiveModule || effectiveModule === 'Fonksiyonel' || effectiveModule === 'Genel') {
+        effectiveModule =
+          derivedScreenCtx?.moduleName ||
+          (matchedReq?.category && matchedReq.category !== 'Fonksiyonel'
+            ? matchedReq.category
+            : 'İşlem Yönetimi');
+      }
+
       return {
         ...tc,
         id: tcId,
         reqId: cleanReqId,
-        module: tc.module || matchedReq?.category || 'Genel',
+        module: effectiveModule,
         title: tc.title || 'Fonksiyonel Test Senaryosu',
         description: tc.description || tc.title || '',
         preconditions: tc.preconditions || 'Sistem aktif ve kullanıcı oturumu açık olmalıdır.',
