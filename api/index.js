@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import express from "express";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI as GoogleGenAI2, Type as Type2, ThinkingLevel as ThinkingLevel2 } from "@google/genai";
 
 // server/engineeringEvaluation.ts
 function calculateGenerationStats(requirements, testCases) {
@@ -243,6 +243,1293 @@ function generateEngineeringRecommendations(requirements, testCases, language = 
     }
   }
   return recommendations;
+}
+
+// server/diagramEngine.ts
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
+var NEGATIVE_BRANCH_REGEX = /\b(hayır|hayir|no|false|fail|failed|error|hata|red|reject|rejected|iptal|cancel|geçersiz|gecersiz|invalid|blocked|bloke|timeout|zaman\s*aşım|yetersiz|yetkisiz|forbidden|400|401|403|404|409|422|500|503|başarısız|basarisiz|eksik|ret|süre\s*doldu)\b/i;
+function cleanNodeShape(raw) {
+  const s = raw.trim();
+  if (/^\(\[.*\]\)$/.test(s) || /^\(\(.*\)\)$/.test(s)) {
+    const inner = s.replace(/^\(\[|\(\(|\)\)|\]\)$/g, "").trim();
+    const isEnd2 = /bitiş|bitis|end|son|tamamland|iptal|bloke|red|onayland|forbidden|yetersiz|oluşturuldu|gönderildi/i.test(inner);
+    const isStart2 = /başla|basla|start|giriş|tetik/i.test(inner);
+    return { label: inner, type: isStart2 ? "start" : isEnd2 ? "end" : "start" };
+  }
+  if (/^\{\{.*\}\}$/.test(s) || /^\{.*\}$/.test(s)) {
+    return { label: s.replace(/^\{\{?|\}?\}\}$/g, "").trim(), type: "decision" };
+  }
+  if (/^\[\[.*\]\]$/.test(s)) {
+    return { label: s.replace(/^\[\[|\]\]$/g, "").trim(), type: "fork_join" };
+  }
+  if (/^\[\(.*\)\]$/.test(s)) {
+    return { label: s.replace(/^\[\(|\)\]$/g, "").trim(), type: "action" };
+  }
+  if (/^\[\/.*\/\]$/.test(s) || /^\[\\.*\\\]$/.test(s)) {
+    return { label: s.replace(/^\[[\/\\]|[\/\\]\]$/g, "").trim(), type: "action" };
+  }
+  if (/^\[.*\]$/.test(s) || /^\(.*\)$/.test(s)) {
+    const inner = s.replace(/^\[|\(|\]|\)$/g, "").trim();
+    const isDecision2 = inner.endsWith("?") || /^(if|eğer|kontrol)\s+/i.test(inner);
+    return { label: inner, type: isDecision2 ? "decision" : "action" };
+  }
+  const isDecision = s.endsWith("?") || /^(if|eğer)\s+/i.test(s);
+  const isEnd = /^(end|bitiş|bitis|stop|finish|son)$/i.test(s);
+  const isStart = /^(start|başla|basla|başlangıç|baslangic)$/i.test(s);
+  return {
+    label: s,
+    type: isStart ? "start" : isEnd ? "end" : isDecision ? "decision" : "action"
+  };
+}
+function detectDiagramFormat(rawText) {
+  const t = (rawText || "").trim();
+  if (/<bpmn:|<definitions|<mxGraphModel|<mxCell/i.test(t)) return "bpmn_xml";
+  if (/@startuml|@enduml|:[^;]+;\s*$/m.test(t)) return "plantuml";
+  if (/^\s*(flowchart|graph|stateDiagram)/im.test(t) || /-->|-\.->|==>/.test(t)) return "mermaid";
+  return "text_flow";
+}
+function parseActivityDiagramText(rawText) {
+  const text = (rawText || "").trim();
+  const formatDetected = detectDiagramFormat(text);
+  const nodeMap = /* @__PURE__ */ new Map();
+  const edges = [];
+  const swimlanesSet = /* @__PURE__ */ new Set();
+  let currentSwimlane;
+  let processTitle = "S\xFCre\xE7 Ak\u0131\u015F Diyagram\u0131";
+  const ensureNode = (rawId, rawShape) => {
+    const id = rawId.trim().replace(/[^a-zA-Z0-9_\-çğıöşüÇĞİÖŞÜ]/g, "_");
+    if (!id) return "";
+    if (rawShape) {
+      const parsed = cleanNodeShape(rawShape);
+      const existing = nodeMap.get(id);
+      if (!existing || existing.label === id) {
+        nodeMap.set(id, {
+          id,
+          label: parsed.label || id,
+          type: parsed.type,
+          swimlane: currentSwimlane || existing?.swimlane
+        });
+      } else if (currentSwimlane && !existing.swimlane) {
+        existing.swimlane = currentSwimlane;
+      }
+    } else if (!nodeMap.has(id)) {
+      const parsed = cleanNodeShape(rawId);
+      nodeMap.set(id, {
+        id,
+        label: parsed.label,
+        type: parsed.type,
+        swimlane: currentSwimlane
+      });
+    } else if (currentSwimlane && !nodeMap.get(id).swimlane) {
+      nodeMap.get(id).swimlane = currentSwimlane;
+    }
+    return id;
+  };
+  if (formatDetected === "bpmn_xml") {
+    const taskMatches = text.matchAll(
+      /<(?:bpmn:)?(startEvent|endEvent|task|userTask|serviceTask|scriptTask|exclusiveGateway|inclusiveGateway|parallelGateway|subProcess|mxCell)[^>]*?(?:id="([^"]*)")?[^>]*?(?:name|value)="([^"]+)"/gi
+    );
+    let seq = 0;
+    for (const m of taskMatches) {
+      const tag = m[1].toLowerCase();
+      const id = m[2] || `n_${++seq}`;
+      const label = m[3].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (!label) continue;
+      let type = "action";
+      if (tag.includes("start")) type = "start";
+      else if (tag.includes("end")) type = "end";
+      else if (tag.includes("exclusive") || tag.includes("inclusive") || label.endsWith("?")) type = "decision";
+      else if (tag.includes("parallel")) type = "fork_join";
+      nodeMap.set(id, { id, label, type });
+    }
+    const flowMatches = text.matchAll(
+      /<(?:bpmn:)?sequenceFlow[^>]*?sourceRef="([^"]+)"[^>]*?targetRef="([^"]+)"(?:[^>]*?name="([^"]*)")?/gi
+    );
+    for (const fm of flowMatches) {
+      const label = fm[3]?.trim() || void 0;
+      edges.push({
+        from: fm[1],
+        to: fm[2],
+        label,
+        isNegative: label ? NEGATIVE_BRANCH_REGEX.test(label) : false
+      });
+    }
+    const mxEdgeMatches = text.matchAll(
+      /<mxCell[^>]*?edge="1"[^>]*?(?:value="([^"]*)")?[^>]*?source="([^"]+)"[^>]*?target="([^"]+)"[^>]*?>/gi
+    );
+    for (const me of mxEdgeMatches) {
+      const label = me[1]?.replace(/<[^>]+>/g, " ").trim() || void 0;
+      edges.push({
+        from: me[2],
+        to: me[3],
+        label,
+        isNegative: label ? NEGATIVE_BRANCH_REGEX.test(label) : false
+      });
+    }
+  } else if (formatDetected === "plantuml") {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    let prevId = "";
+    let seq = 0;
+    const branchStack = [];
+    for (const line of lines) {
+      if (line.startsWith("@") || line.startsWith("'")) continue;
+      const titleMatch = line.match(/^title\s+(.+)/i);
+      if (titleMatch) {
+        processTitle = titleMatch[1].trim();
+        continue;
+      }
+      const swimMatch = line.match(/^\|([^|]+)\|$/) || line.match(/^partition\s+"?([^"{]+)"?\s*\{?$/i);
+      if (swimMatch) {
+        currentSwimlane = swimMatch[1].trim();
+        swimlanesSet.add(currentSwimlane);
+        continue;
+      }
+      if (line === "}") {
+        currentSwimlane = void 0;
+        continue;
+      }
+      if (/^start$/i.test(line)) {
+        const id = "Start";
+        nodeMap.set(id, { id, label: "Ba\u015Fla", type: "start", swimlane: currentSwimlane });
+        prevId = id;
+        continue;
+      }
+      if (/^(stop|end)$/i.test(line)) {
+        const id = `End_${++seq}`;
+        nodeMap.set(id, { id, label: "Biti\u015F", type: "end", swimlane: currentSwimlane });
+        if (prevId) edges.push({ from: prevId, to: id });
+        prevId = id;
+        continue;
+      }
+      const ifMatch = line.match(/^(?:else)?if\s*\(([^)]+)\)\s*then\s*(?:\(([^)]+)\))?/i);
+      if (ifMatch) {
+        const decId = `Dec_${++seq}`;
+        nodeMap.set(decId, { id: decId, label: ifMatch[1].trim(), type: "decision", swimlane: currentSwimlane });
+        if (/^elseif/i.test(line) && branchStack.length > 0) {
+          const top = branchStack[branchStack.length - 1];
+          if (prevId && prevId !== top.decisionId) top.branchEnds.push(prevId);
+          edges.push({ from: top.decisionId, to: decId, label: "Hay\u0131r / Alternatif", isNegative: true });
+        } else if (prevId) {
+          edges.push({ from: prevId, to: decId });
+        }
+        branchStack.push({
+          decisionId: decId,
+          pendingLabel: ifMatch[2]?.trim() || "Evet",
+          branchEnds: []
+        });
+        prevId = decId;
+        continue;
+      }
+      const elseMatch = line.match(/^else\s*(?:\(([^)]+)\))?/i);
+      if (elseMatch && branchStack.length > 0) {
+        const top = branchStack[branchStack.length - 1];
+        if (prevId && prevId !== top.decisionId) top.branchEnds.push(prevId);
+        top.pendingLabel = elseMatch[1]?.trim() || "Hay\u0131r";
+        prevId = top.decisionId;
+        continue;
+      }
+      if (/^endif$/i.test(line) && branchStack.length > 0) {
+        const closed = branchStack.pop();
+        if (prevId && prevId !== closed.decisionId) closed.branchEnds.push(prevId);
+        continue;
+      }
+      if (/^fork(\s+again)?$/i.test(line)) {
+        const forkId = `Fork_${++seq}`;
+        nodeMap.set(forkId, { id: forkId, label: "Paralel Ak\u0131\u015F Ba\u015Flat", type: "fork_join", swimlane: currentSwimlane });
+        if (prevId) edges.push({ from: prevId, to: forkId });
+        prevId = forkId;
+        continue;
+      }
+      const repeatWhileMatch = line.match(/^repeat\s+while\s*\(([^)]+)\)/i);
+      if (repeatWhileMatch && prevId) {
+        const loopDecId = `Loop_${++seq}`;
+        nodeMap.set(loopDecId, { id: loopDecId, label: repeatWhileMatch[1].trim(), type: "decision", swimlane: currentSwimlane });
+        edges.push({ from: prevId, to: loopDecId });
+        const startLoopTarget = Array.from(nodeMap.values()).find((n) => n.type === "action")?.id;
+        if (startLoopTarget) {
+          edges.push({ from: loopDecId, to: startLoopTarget, label: "Tekrar Dene", isNegative: false });
+        }
+        prevId = loopDecId;
+        continue;
+      }
+      const actMatch = line.match(/^:(.+);$/);
+      if (actMatch) {
+        const actId = `Act_${++seq}`;
+        const actLabel = actMatch[1].trim();
+        nodeMap.set(actId, {
+          id: actId,
+          label: actLabel,
+          type: actLabel.endsWith("?") ? "decision" : "action",
+          swimlane: currentSwimlane
+        });
+        if (prevId) {
+          let lbl;
+          const top = branchStack[branchStack.length - 1];
+          if (top && prevId === top.decisionId && top.pendingLabel) {
+            lbl = top.pendingLabel;
+            top.pendingLabel = void 0;
+          }
+          edges.push({
+            from: prevId,
+            to: actId,
+            label: lbl,
+            isNegative: lbl ? NEGATIVE_BRANCH_REGEX.test(lbl) : false
+          });
+        }
+        prevId = actId;
+      }
+    }
+  } else {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const sequentialStepIds = [];
+    for (const line of lines) {
+      if (/^(flowchart|graph|stateDiagram|%%)/i.test(line)) continue;
+      const titleMatch = line.match(/^(?:title|Başlık|Süreç)\s*:\s*(.+)/i);
+      if (titleMatch) {
+        processTitle = titleMatch[1].trim();
+        continue;
+      }
+      const subMatch = line.match(/^subgraph\s+(?:[a-zA-Z0-9_\-]+\s*\[)?([^\]\n"]+|"[^"]+")\]?/i);
+      if (subMatch) {
+        currentSwimlane = subMatch[1].replace(/^"|"$/g, "").trim();
+        swimlanesSet.add(currentSwimlane);
+        continue;
+      }
+      if (/^end$/i.test(line)) {
+        currentSwimlane = void 0;
+        continue;
+      }
+      const arrowRegex = /\s*(?:--+>|--[^>]*-->|-\.[^.]*\.->|-\.->|==>|\.\.>|->)\s*(?:\|([^|]+)\|)?\s*/g;
+      if (arrowRegex.test(line)) {
+        arrowRegex.lastIndex = 0;
+        const segments = [];
+        let lastIdx = 0;
+        let match;
+        while ((match = arrowRegex.exec(line)) !== null) {
+          const leftToken = line.slice(lastIdx, match.index).trim();
+          const inlineLabelMatch = match[0].match(/(?:--|\-\.)\s*([^->]+?)\s*(?:-->|\.->)/);
+          const edgeLabel = (match[1] || inlineLabelMatch?.[1] || "").trim() || void 0;
+          segments.push({ token: leftToken, edgeLabel });
+          lastIdx = arrowRegex.lastIndex;
+        }
+        const tailToken = line.slice(lastIdx).trim();
+        if (tailToken) segments.push({ token: tailToken });
+        for (let i = 0; i < segments.length - 1; i++) {
+          const leftRaw = segments[i].token;
+          const rightRaw = segments[i + 1].token;
+          const edgeLabel = segments[i].edgeLabel;
+          const leftParts = leftRaw.match(/^([a-zA-Z0-9_\-çğıöşüÇĞİÖŞÜ]+)\s*([\(\[\{].*[\)\]\}])?$/);
+          const rightParts = rightRaw.match(/^([a-zA-Z0-9_\-çğıöşüÇĞİÖŞÜ]+)\s*([\(\[\{].*[\)\]\}])?$/);
+          const fromId = leftParts ? ensureNode(leftParts[1], leftParts[2]) : ensureNode(`n_${nodeMap.size + 1}`, leftRaw);
+          const toId = rightParts ? ensureNode(rightParts[1], rightParts[2]) : ensureNode(`n_${nodeMap.size + 1}`, rightRaw);
+          if (fromId && toId) {
+            edges.push({
+              from: fromId,
+              to: toId,
+              label: edgeLabel,
+              isNegative: edgeLabel ? NEGATIVE_BRANCH_REGEX.test(edgeLabel) : false
+            });
+          }
+        }
+      } else if (/^(?:\d+[\.\)]|Adım\s*\d+:?)\s+/i.test(line)) {
+        const cleanedStep = line.replace(/^(?:\d+[\.\)]|Adım\s*\d+:?)\s+/i, "").trim();
+        if (cleanedStep) {
+          const stepId = `Step_${sequentialStepIds.length + 1}`;
+          ensureNode(stepId, cleanedStep);
+          if (sequentialStepIds.length > 0) {
+            edges.push({ from: sequentialStepIds[sequentialStepIds.length - 1], to: stepId });
+          }
+          sequentialStepIds.push(stepId);
+        }
+      }
+    }
+  }
+  const nodes = Array.from(nodeMap.values());
+  const paths = enumerateProcessPaths(nodes, edges);
+  if (processTitle === "S\xFCre\xE7 Ak\u0131\u015F Diyagram\u0131" && nodes.length > 0) {
+    const startNode = nodes.find((n) => n.type === "start") || nodes[0];
+    processTitle = startNode.label.replace(/^başla\s*:\s*/i, "").trim() || "S\xFCre\xE7 Ak\u0131\u015F Diyagram\u0131";
+  }
+  return {
+    formatDetected,
+    processTitle,
+    swimlanes: Array.from(swimlanesSet),
+    nodes,
+    edges,
+    paths
+  };
+}
+function enumerateProcessPaths(nodes, edges) {
+  if (nodes.length === 0) return [];
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const outEdges = /* @__PURE__ */ new Map();
+  const inDegree = /* @__PURE__ */ new Map();
+  nodes.forEach((n) => {
+    outEdges.set(n.id, []);
+    inDegree.set(n.id, 0);
+  });
+  edges.forEach((e) => {
+    if (!outEdges.has(e.from)) outEdges.set(e.from, []);
+    outEdges.get(e.from).push(e);
+    inDegree.set(e.to, (inDegree.get(e.to) || 0) + 1);
+  });
+  const startNodes = nodes.filter((n) => n.type === "start" || (inDegree.get(n.id) || 0) === 0);
+  const roots = startNodes.length > 0 ? startNodes : [nodes[0]];
+  const rawPaths = [];
+  const MAX_PATHS = 36;
+  const MAX_DEPTH = 28;
+  const dfs = (currentId, visitedCount, pathNodeIds, conditions, hasLoop, hasNegativeEdge, hasParallel) => {
+    if (rawPaths.length >= MAX_PATHS || pathNodeIds.length >= MAX_DEPTH) return;
+    const currentNode = nodeById.get(currentId);
+    const nextParallel = hasParallel || currentNode?.type === "fork_join";
+    const nextVisited = new Map(visitedCount);
+    const visits = (nextVisited.get(currentId) || 0) + 1;
+    nextVisited.set(currentId, visits);
+    const nextNodeIds = [...pathNodeIds, currentId];
+    const outgoing = outEdges.get(currentId) || [];
+    if (outgoing.length === 0 || currentNode?.type === "end" || visits > 1) {
+      rawPaths.push({
+        nodeIds: nextNodeIds,
+        conditions,
+        hasLoop: hasLoop || visits > 1,
+        hasNegativeEdge,
+        hasParallel: nextParallel
+      });
+      return;
+    }
+    for (const edge of outgoing) {
+      const targetVisits = nextVisited.get(edge.to) || 0;
+      const edgeNeg = Boolean(edge.isNegative) || NEGATIVE_BRANCH_REGEX.test(nodeById.get(edge.to)?.label || "");
+      const nextConditions = edge.label ? [...conditions, `${currentNode?.label || currentId} \u2192 ${edge.label}`] : conditions;
+      if (targetVisits >= 1) {
+        rawPaths.push({
+          nodeIds: [...nextNodeIds, edge.to],
+          conditions: [...nextConditions, "(Tekrar / D\xF6ng\xFC Ge\xE7i\u015Fi)"],
+          hasLoop: true,
+          hasNegativeEdge: hasNegativeEdge || edgeNeg,
+          hasParallel: nextParallel
+        });
+      } else {
+        dfs(
+          edge.to,
+          nextVisited,
+          nextNodeIds,
+          nextConditions,
+          hasLoop,
+          hasNegativeEdge || edgeNeg,
+          nextParallel
+        );
+      }
+    }
+  };
+  for (const root of roots) {
+    dfs(root.id, /* @__PURE__ */ new Map(), [], [], false, false, false);
+  }
+  const seenSignatures = /* @__PURE__ */ new Set();
+  const finalPaths = [];
+  let seq = 1;
+  for (const rp of rawPaths) {
+    const sig = `${rp.nodeIds.join(">")}|${rp.conditions.join(",")}`;
+    if (seenSignatures.has(sig)) continue;
+    seenSignatures.add(sig);
+    const nodeLabels = rp.nodeIds.map((id2) => nodeById.get(id2)?.label || id2);
+    const endLabel = nodeLabels[nodeLabels.length - 1] || "";
+    const isNeg = rp.hasNegativeEdge || NEGATIVE_BRANCH_REGEX.test(endLabel);
+    const pathType = rp.hasLoop ? "loop" : isNeg ? "negative" : rp.hasParallel ? "parallel" : rp.conditions.length > 0 && seq > 1 ? "decision" : "happy";
+    const swimlanes = Array.from(
+      new Set(
+        rp.nodeIds.map((id2) => nodeById.get(id2)?.swimlane).filter((s) => Boolean(s))
+      )
+    );
+    const condSummary = rp.conditions.length > 0 ? rp.conditions[rp.conditions.length - 1] : `${nodeLabels[0]} \u2192 ${endLabel}`;
+    const pathPrefix = pathType === "happy" ? "Ana Ak\u0131\u015F (Happy Path)" : pathType === "loop" ? "D\xF6ng\xFC / Tekrar Deneme Ak\u0131\u015F\u0131" : pathType === "negative" ? "Hata / Red / \u0130stisna Yolu" : pathType === "parallel" ? "Paralel Dal Ak\u0131\u015F\u0131" : "Alternatif Karar Yolu";
+    const id = `PATH-${String(seq).padStart(2, "0")}`;
+    seq++;
+    finalPaths.push({
+      id,
+      name: `${pathPrefix}: ${condSummary}`.slice(0, 120),
+      pathType,
+      nodeIds: rp.nodeIds,
+      nodeLabels,
+      conditions: rp.conditions,
+      hasLoop: rp.hasLoop,
+      isNegative: isNeg,
+      isParallel: rp.hasParallel,
+      swimlanes
+    });
+  }
+  finalPaths.sort((a, b) => {
+    const order = { happy: 0, parallel: 1, decision: 2, loop: 3, negative: 4 };
+    return order[a.pathType] - order[b.pathType];
+  });
+  return finalPaths.map((p, idx) => ({
+    ...p,
+    id: `PATH-${String(idx + 1).padStart(2, "0")}`
+  }));
+}
+function extractGraphDimensions(graph) {
+  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const outEdgesMap = /* @__PURE__ */ new Map();
+  graph.edges.forEach((e) => {
+    if (!outEdgesMap.has(e.from)) outEdgesMap.set(e.from, []);
+    outEdgesMap.get(e.from).push(e);
+  });
+  const decisions = graph.nodes.filter((n) => n.type === "decision" || (outEdgesMap.get(n.id)?.length || 0) >= 2).map((n) => {
+    const outgoing = outEdgesMap.get(n.id) || [];
+    return {
+      nodeId: n.id,
+      label: n.label,
+      swimlane: n.swimlane,
+      branches: outgoing.map((e, i) => ({
+        label: e.label || `Dal ${i + 1}`,
+        targetLabel: nodeById.get(e.to)?.label || e.to,
+        isNegative: Boolean(e.isNegative) || NEGATIVE_BRANCH_REGEX.test(e.label || "")
+      }))
+    };
+  });
+  const handoffSeen = /* @__PURE__ */ new Set();
+  const swimlaneHandoffs = [];
+  graph.edges.forEach((e) => {
+    const fromNode = nodeById.get(e.from);
+    const toNode = nodeById.get(e.to);
+    if (fromNode?.swimlane && toNode?.swimlane && fromNode.swimlane !== toNode.swimlane) {
+      const key = `${fromNode.swimlane}=>${toNode.swimlane}:${fromNode.label}->${toNode.label}`;
+      if (!handoffSeen.has(key)) {
+        handoffSeen.add(key);
+        swimlaneHandoffs.push({
+          fromSwimlane: fromNode.swimlane,
+          toSwimlane: toNode.swimlane,
+          fromLabel: fromNode.label,
+          toLabel: toNode.label,
+          condition: e.label
+        });
+      }
+    }
+  });
+  const actionNodes = graph.nodes.filter((n) => n.type === "action");
+  const parallelNodes = graph.nodes.filter((n) => n.type === "fork_join");
+  const loopPaths = graph.paths.filter((p) => p.hasLoop);
+  return { decisions, swimlaneHandoffs, actionNodes, loopPaths, parallelNodes };
+}
+function buildStepExpectedPairs(nodeLabels, conditions, isNegativePath, customInstr, isTurkish) {
+  const steps = [];
+  const stepExpectedResults = [];
+  nodeLabels.forEach((nodeLabel, nIdx) => {
+    const stepNum = nIdx + 1;
+    const condForStep = conditions.find((c) => c.startsWith(`${nodeLabel} \u2192`));
+    if (nIdx === 0) {
+      steps.push(
+        isTurkish ? `${stepNum}. S\xFCreci "${nodeLabel}" ba\u015Flang\u0131\xE7 noktas\u0131ndan tetikleyin ve \xF6n oturum/parametreleri haz\u0131rlay\u0131n.${customInstr ? ` (${customInstr.slice(0, 55)})` : ""}` : `${stepNum}. Trigger process at "${nodeLabel}" and prepare session parameters.`
+      );
+      stepExpectedResults.push(
+        isTurkish ? `${stepNum}. Ba\u015Flang\u0131\xE7 durumu aktif olmal\u0131, i\u015Flem takip kimli\u011Fi (Correlation/Transaction ID) \xFCretilmelidir.` : `${stepNum}. Process starts cleanly with a valid correlation ID.`
+      );
+    } else if (condForStep) {
+      const branchLabel = condForStep.split("\u2192")[1]?.trim() || "";
+      steps.push(
+        isTurkish ? `${stepNum}. "${nodeLabel}" karar kap\u0131s\u0131nda "${branchLabel}" dal\u0131n\u0131 tetikleyecek ko\u015Fullu veriyi g\xF6nderin.` : `${stepNum}. Supply input at decision "${nodeLabel}" to evaluate branch "${branchLabel}".`
+      );
+      stepExpectedResults.push(
+        isTurkish ? `${stepNum}. Karar motoru kural\u0131 do\u011Fru de\u011Ferlendirmeli ve ak\u0131\u015F\u0131 "${branchLabel}" dal\u0131na deterministik olarak y\xF6nlendirmelidir.` : `${stepNum}. Decision gate routes deterministically to "${branchLabel}".`
+      );
+    } else if (nIdx === nodeLabels.length - 1) {
+      steps.push(
+        isTurkish ? `${stepNum}. S\xFCrecin "${nodeLabel}" terminal durumuna ula\u015Ft\u0131\u011F\u0131n\u0131, veritaban\u0131 kayd\u0131n\u0131, bildirimleri ve denetim loglar\u0131n\u0131 do\u011Frulay\u0131n.` : `${stepNum}. Verify terminal state "${nodeLabel}", persisted state, and audit logs.`
+      );
+      stepExpectedResults.push(
+        isTurkish ? isNegativePath ? `${stepNum}. Ak\u0131\u015F g\xFCvenli bi\xE7imde "${nodeLabel}" durumunda sonlanmal\u0131, k\u0131smi veri tutars\u0131zl\u0131\u011F\u0131 olu\u015Fmamal\u0131d\u0131r.` : `${stepNum}. S\xFCre\xE7 "${nodeLabel}" terminal durumunda ba\u015Far\u0131yla tamamlanmal\u0131 ve t\xFCm kay\u0131tlar tutarl\u0131 g\xFCncellenmelidir.` : `${stepNum}. Terminal state "${nodeLabel}" confirmed with full data consistency.`
+      );
+    } else {
+      steps.push(
+        isTurkish ? `${stepNum}. "${nodeLabel}" i\u015Flem ad\u0131m\u0131n\u0131 ge\xE7erli i\u015F y\xFCk\xFC/veri ile \xE7al\u0131\u015Ft\u0131r\u0131p durum ge\xE7i\u015Fini g\xF6zlemleyin.` : `${stepNum}. Execute activity "${nodeLabel}" and observe state transition.`
+      );
+      stepExpectedResults.push(
+        isTurkish ? `${stepNum}. "${nodeLabel}" ad\u0131m\u0131 hata \xFCretmeden tamamlanmal\u0131 ve bir sonraki d\xFC\u011F\xFCme temiz payload ile ge\xE7ilmelidir.` : `${stepNum}. "${nodeLabel}" finishes cleanly and forwards updated context.`
+      );
+    }
+  });
+  if (steps.length === 0) {
+    steps.push(isTurkish ? "1. S\xFCreci ba\u015Flat\u0131n ve karar ad\u0131m\u0131n\u0131 \xE7al\u0131\u015Ft\u0131r\u0131n." : "1. Start process and evaluate decision.");
+    stepExpectedResults.push(isTurkish ? "1. S\xFCre\xE7 beklenen ad\u0131ma ula\u015Fmal\u0131d\u0131r." : "1. Process reaches expected node.");
+  }
+  return { steps, stepExpectedResults };
+}
+function synthesizeTestCasesFromDiagramGraph(graph, strategy, config, isTurkish) {
+  const customInstr = String(config?.customInstructions || "").trim();
+  const customHint = customInstr ? isTurkish ? ` (\xD6zel Y\xF6nerge: ${customInstr.slice(0, 90)})` : ` (Custom Guidance: ${customInstr.slice(0, 90)})` : "";
+  let selectedPaths = [...graph.paths];
+  if (strategy === "basis_path" && selectedPaths.length > 8) {
+    const happy = selectedPaths.filter((p) => p.pathType === "happy").slice(0, 2);
+    const loop = selectedPaths.filter((p) => p.pathType === "loop").slice(0, 2);
+    const parallel = selectedPaths.filter((p) => p.pathType === "parallel").slice(0, 2);
+    const neg = selectedPaths.filter((p) => p.pathType === "negative").slice(0, 3);
+    const dec = selectedPaths.filter((p) => p.pathType === "decision").slice(0, 3);
+    selectedPaths = Array.from(/* @__PURE__ */ new Set([...happy, ...parallel, ...loop, ...neg, ...dec]));
+  }
+  const dims = extractGraphDimensions(graph);
+  const requirements = [];
+  const testCases = [];
+  const pathInfos = [];
+  selectedPaths.forEach((p, idx) => {
+    const reqId = `FLOW-${String(idx + 1).padStart(2, "0")}`;
+    const mod = p.swimlanes[0] || graph.swimlanes[0] || graph.processTitle || "S\xFCre\xE7 Ak\u0131\u015F\u0131";
+    const condDesc = p.conditions.length > 0 ? p.conditions.join(" \u2192 ") : isTurkish ? "Do\u011Frudan ard\u0131\u015F\u0131k s\xFCre\xE7 ad\u0131mlar\u0131" : "Direct sequential flow";
+    requirements.push({
+      id: reqId,
+      title: `${p.name}`,
+      description: isTurkish ? `S\xFCre\xE7 Yolu (${p.id}): ${p.nodeLabels.join(" -> ")}. Karar Ko\u015Fullar\u0131: ${condDesc}.${customHint}` : `Process Path (${p.id}): ${p.nodeLabels.join(" -> ")}. Conditions: ${condDesc}.${customHint}`,
+      category: mod,
+      coverageStatus: "Full",
+      missingTestTypes: [],
+      gapDescription: isTurkish ? `${p.id} s\xFCre\xE7 yolu \xE7ok boyutlu test senaryolar\u0131 ile tam kapsand\u0131.` : `Process path ${p.id} covered across functional and edge dimensions.`
+    });
+    pathInfos.push({
+      id: p.id,
+      name: p.name,
+      pathType: p.pathType,
+      nodes: p.nodeLabels,
+      conditions: p.conditions,
+      linkedReqId: reqId
+    });
+    const { steps, stepExpectedResults } = buildStepExpectedPairs(
+      p.nodeLabels,
+      p.conditions,
+      p.isNegative,
+      customInstr,
+      isTurkish
+    );
+    const testType = p.isNegative ? "Negatif (Hata Y\xF6netimi)" : p.hasLoop ? "Durum Ge\xE7i\u015F Testi (State Transition)" : p.conditions.length > 0 && p.pathType !== "happy" ? "Karar Tablosu Testi (Decision Table)" : "Pozitif (Fonksiyonel Do\u011Fruluk)";
+    const endNode = p.nodeLabels[p.nodeLabels.length - 1] || "Tamamland\u0131";
+    const expectedResult = isTurkish ? p.isNegative ? `S\xFCre\xE7 belirtilen karar ko\u015Fulunda (${condDesc}) g\xFCvenli bi\xE7imde reddedilmeli/durdurulmal\u0131 ve "${endNode}" durumuna ge\xE7melidir.` : `S\xFCre\xE7 t\xFCm ad\u0131mlar\u0131 (${p.nodeLabels.length} d\xFC\u011F\xFCm) hatas\u0131z tamamlayarak "${endNode}" sonucuna ula\u015Fmal\u0131d\u0131r.` : `Process follows path ${p.id} cleanly and reaches "${endNode}".`;
+    testCases.push({
+      id: `TC-${reqId}-01`,
+      reqId,
+      module: mod,
+      title: `[${p.id}] ${p.name}`,
+      description: isTurkish ? `Activity Diagram \xFCzerindeki "${p.name}" ak\u0131\u015F yolunun t\xFCm ara d\xFC\u011F\xFCmleri (${p.nodeLabels.length} ad\u0131m) kapsayan u\xE7tan uca do\u011Frulamas\u0131.` : `Full node-by-node E2E verification for "${p.name}".`,
+      preconditions: isTurkish ? `Sistem aktif, kullan\u0131c\u0131/akt\xF6r oturumu a\xE7\u0131k ve "${p.nodeLabels[0] || "Ba\u015Flang\u0131\xE7"}" ad\u0131m\u0131 i\xE7in \xF6n ko\u015Ful verileri haz\u0131r olmal\u0131d\u0131r.` : `System active and prerequisites for "${p.nodeLabels[0]}" ready.`,
+      steps,
+      stepExpectedResults,
+      testData: p.conditions.length > 0 ? isTurkish ? `Dallanma Ko\u015Fullar\u0131: ${p.conditions.join(" | ")}` : `Branch Conditions: ${p.conditions.join(" | ")}` : isTurkish ? `Ge\xE7erli u\xE7tan uca ak\u0131\u015F test verisi (${mod})` : `Valid flow test data (${mod})`,
+      expectedResult,
+      priority: p.pathType === "happy" || p.isNegative ? "Y\xFCksek" : "Orta",
+      testType,
+      executionType: "Manuel",
+      severity: p.isNegative ? "Kritik" : "Normal"
+    });
+    if (strategy !== "basis_path" && (p.pathType === "happy" || p.hasLoop || p.isParallel)) {
+      const variantTitle = p.hasLoop ? `[D\xF6ng\xFC S\u0131n\u0131r\u0131] ${p.id} - Maksimum Tekrar Deneme & Kilitlenme Do\u011Frulamas\u0131` : p.isParallel ? `[E\u015Fzamanl\u0131l\u0131k] ${p.id} - Paralel Dal Senkronizasyonu ve K\u0131smi Gecikme Testi` : `[Idempotency] ${p.id} - M\xFCkerrer \u0130stek / \xC7ift Tetikleme \xD6nleme Testi`;
+      testCases.push({
+        id: `TC-${reqId}-02`,
+        reqId,
+        module: mod,
+        title: variantTitle,
+        description: isTurkish ? p.hasLoop ? `${p.id} d\xF6ng\xFCs\xFCnde N-1. denemede kurtarma ile maksimum deneme a\u015F\u0131m\u0131nda g\xFCvenli durdurma davran\u0131\u015F\u0131n\u0131 do\u011Frular.` : p.isParallel ? `${p.id} paralel fork/join dallar\u0131n\u0131n farkl\u0131 h\u0131zlarda tamamlanmas\u0131na ra\u011Fmen birle\u015Fme noktas\u0131nda veri b\xFCt\xFCnl\xFC\u011F\xFCn\xFC korudu\u011Funu do\u011Frular.` : `${p.id} ana ak\u0131\u015F\u0131n\u0131n art arda \xE7ift t\u0131klama / tekrar g\xF6nderim alt\u0131nda m\xFCkerrer kay\u0131t \xFCretmedi\u011Fini do\u011Frular.` : `State transition, idempotency and concurrency verification for ${p.id}.`,
+        preconditions: isTurkish ? `"${p.nodeLabels[0]}" a\u015Famas\u0131 i\xE7in aktif oturum ve benzersiz i\u015Flem anahtar\u0131 (Idempotency-Key) mevcut olmal\u0131d\u0131r.` : `Active session and idempotency context available.`,
+        steps: isTurkish ? p.hasLoop ? [
+          `1. "${p.nodeLabels[0]}" ad\u0131m\u0131ndan s\xFCreci ba\u015Flat\u0131n ve d\xF6ng\xFC karar noktas\u0131na ula\u015F\u0131n.`,
+          `2. \u0130lk hata/tekrar ko\u015Fulunu \xFCreterek d\xF6ng\xFCye 1. kez girildi\u011Fini do\u011Frulay\u0131n.`,
+          `3. Maksimum izin verilen tekrar say\u0131s\u0131na kadar ge\xE7ersiz veri ile d\xF6ng\xFCy\xFC tetikleyin.`,
+          `4. Limit a\u015F\u0131ld\u0131\u011F\u0131nda s\xFCrecin kilitlenme/hata dal\u0131na y\xF6nlendi\u011Fini ve ge\xE7erli denemeyle kurtar\u0131lmad\u0131\u011F\u0131n\u0131 kontrol edin.`
+        ] : p.isParallel ? [
+          `1. "${p.nodeLabels[0]}" ak\u0131\u015F\u0131n\u0131 ba\u015Flat\u0131p paralel fork d\xFC\u011F\xFCm\xFCne ula\u015F\u0131n.`,
+          `2. Paralel dallardan ilkini normal s\xFCrede, di\u011Ferini yapay gecikme ile tamamlay\u0131n.`,
+          `3. Birle\u015Ftirme (Join) noktas\u0131nda her iki dal\u0131n sonucunun beklendi\u011Fini do\u011Frulay\u0131n.`,
+          `4. Nihai "${endNode}" durumunda t\xFCm alt sonu\xE7lar\u0131n tutarl\u0131 birle\u015Fti\u011Fini teyit edin.`
+        ] : [
+          `1. "${p.nodeLabels[0]}" ad\u0131m\u0131n\u0131 ge\xE7erli verilerle doldurun.`,
+          `2. Onay / g\xF6nderim aksiyonunu milisaniyeler i\xE7inde art arda iki kez tetikleyin.`,
+          `3. \u0130lk iste\u011Fin "${endNode}" durumuna ula\u015Ft\u0131\u011F\u0131n\u0131, ikinci iste\u011Fin ise engellendi\u011Fini/ayn\u0131 sonucu d\xF6nd\xFCrd\xFC\u011F\xFCn\xFC do\u011Frulay\u0131n.`
+        ] : ["1. Start path.", "2. Execute retry/parallel/double-submit condition.", "3. Verify state integrity."],
+        stepExpectedResults: isTurkish ? p.hasLoop ? [
+          "1. S\xFCre\xE7 d\xF6ng\xFC kap\u0131s\u0131na temiz payload ile ula\u015Fmal\u0131d\u0131r.",
+          "2. Saya\xE7 1 artmal\u0131 ve tekrar ak\u0131\u015F\u0131 tetiklenmelidir.",
+          "3. Her tekrar denemesi denetim loguna ayr\u0131 zaman damgas\u0131yla yaz\u0131lmal\u0131d\u0131r.",
+          "4. Maksimum e\u015Fik a\u015F\u0131ld\u0131\u011F\u0131nda sonsuz d\xF6ng\xFC olu\u015Fmamal\u0131, oturum/i\u015Flem g\xFCvenli hata durumuyla kapat\u0131lmal\u0131d\u0131r."
+        ] : p.isParallel ? [
+          "1. Paralel dallar e\u015Fzamanl\u0131 olarak tetiklenmelidir.",
+          "2. H\u0131zl\u0131 biten dal erken tamamlama ile s\xFCreci bozmamal\u0131, join bariyerinde beklemelidir.",
+          "3. T\xFCm dallar tamamlanmadan bir sonraki d\xFC\u011F\xFCme ge\xE7ilmemelidir.",
+          "4. Nihai durumda veri kayb\u0131 veya yar\u0131\u015F durumu (race condition) olu\u015Fmamal\u0131d\u0131r."
+        ] : [
+          "1. Form/istek parametreleri do\u011Frulanmal\u0131d\u0131r.",
+          "2. Sistem ikinci iste\u011Fi ayn\u0131 Idempotency-Key ile yakalamal\u0131d\u0131r.",
+          "3. Veritaban\u0131nda yaln\u0131zca tek bir ge\xE7erli i\u015Flem kayd\u0131 olu\u015Fturulmal\u0131d\u0131r."
+        ] : ["1. Initialized.", "2. Guard enforced.", "3. Single consistent outcome."],
+        testData: isTurkish ? p.hasLoop ? "Tekrar Sayac\u0131 = N-1 ve N+1 (Limit A\u015F\u0131m\u0131)" : "E\u015Fzamanl\u0131 \xE7ift istek / gecikmeli paralel yan\u0131t" : "Loop limit & concurrency payload",
+        expectedResult: isTurkish ? "Durum ge\xE7i\u015Fi ve i\u015Flem b\xFCt\xFCnl\xFC\u011F\xFC yar\u0131\u015F durumu olmadan korunmal\u0131d\u0131r." : "State transition and idempotency remain intact.",
+        priority: "Y\xFCksek",
+        testType: "Durum Ge\xE7i\u015F Testi (State Transition)",
+        executionType: "Manuel",
+        severity: "Kritik"
+      });
+    }
+  });
+  const decisionLimit = strategy === "full_e2e" ? dims.decisions.length : strategy === "branch" ? Math.min(dims.decisions.length, 5) : Math.min(dims.decisions.length, 2);
+  dims.decisions.slice(0, decisionLimit).forEach((dec, dIdx) => {
+    const targetReqId = requirements[dIdx % Math.max(1, requirements.length)]?.id || "FLOW-01";
+    const branchSummary = dec.branches.map((b) => `"${b.label}" -> ${b.targetLabel}`).join(" | ");
+    testCases.push({
+      id: `TC-DEC-${String(dIdx + 1).padStart(2, "0")}-BVA`,
+      reqId: targetReqId,
+      module: dec.swimlane || graph.processTitle || "Karar Motoru",
+      title: `[Karar & S\u0131n\u0131r De\u011Fer] "${dec.label}" - E\u015Fik De\u011Fer & Dallanma Do\u011Frulamas\u0131`,
+      description: isTurkish ? `"${dec.label}" karar noktas\u0131ndaki (${branchSummary}) t\xFCm ko\u015Fullar\u0131n s\u0131n\u0131r alt\u0131, tam s\u0131n\u0131r, s\u0131n\u0131r \xFCst\xFC ve bo\u015F de\u011Ferlerde do\u011Fru y\xF6nlendirme yapt\u0131\u011F\u0131n\u0131 do\u011Frular.` : `Boundary and decision table test for decision node "${dec.label}".`,
+      preconditions: isTurkish ? `Ak\u0131\u015F "${dec.label}" karar d\xFC\u011F\xFCm\xFCnden hemen \xF6nceki ad\u0131mda bekliyor olmal\u0131d\u0131r.` : `Process positioned before decision node "${dec.label}".`,
+      steps: isTurkish ? [
+        `1. S\xFCreci ba\u015Flat\u0131p "${dec.label}" karar noktas\u0131na ula\u015F\u0131n.`,
+        `2. Ko\u015Fulu sa\u011Flayan tam s\u0131n\u0131r de\u011Ferini (Boundary Min/Max) g\xF6ndererek olumlu dal ge\xE7i\u015Fini test edin.`,
+        `3. Ko\u015Fulu ihlal eden s\u0131n\u0131r d\u0131\u015F\u0131 (Min-1 / Max+1 veya ge\xE7ersiz) de\u011Fer ile iste\u011Fi yineleyin.`,
+        `4. Karar parametresini bo\u015F (null/undefined) b\u0131rakarak varsay\u0131lan/hata dal\u0131 davran\u0131\u015F\u0131n\u0131 do\u011Frulay\u0131n.`
+      ] : [
+        `1. Reach decision "${dec.label}".`,
+        `2. Test exact boundary value.`,
+        `3. Test out-of-bounds value.`,
+        `4. Test null/empty input.`
+      ],
+      stepExpectedResults: isTurkish ? [
+        `1. Karar kap\u0131s\u0131 gelen payload \xFCzerindeki ilgili kriteri okumal\u0131d\u0131r.`,
+        `2. E\u015Fik de\u011Ferde olumlu/beklenen dal (${dec.branches[0]?.label || "Evet"}) se\xE7ilmelidir.`,
+        `3. S\u0131n\u0131r d\u0131\u015F\u0131 girdi kesinlikle olumsuz/alternatif dala y\xF6nlendirilmeli ve yanl\u0131\u015F onay verilmemelidir.`,
+        `4. Eksik parametrede sistem belirsiz ge\xE7i\u015F yapmamal\u0131, do\u011Frulama hatas\u0131 veya g\xFCvenli ret dal\u0131n\u0131 tetiklemelidir.`
+      ] : ["1. Gate inspects payload.", "2. Exact threshold accepted.", "3. Out-of-bounds rejected.", "4. Null handled safely."],
+      testData: isTurkish ? `E\u015Fik: Min, Exact, Max+1, Null (${dec.branches.map((b) => b.label).join(" / ")})` : `Boundary dataset (${dec.label})`,
+      expectedResult: isTurkish ? `"${dec.label}" karar kap\u0131s\u0131 t\xFCm s\u0131n\u0131r ve null ko\u015Fullarda belirleyici (deterministic) y\xF6nlendirme yapmal\u0131d\u0131r.` : `Decision node "${dec.label}" behaves deterministically across boundaries.`,
+      priority: "Y\xFCksek",
+      testType: "S\u0131n\u0131r De\u011Fer Analizi (BVA)",
+      executionType: "Manuel",
+      severity: "Y\xFCksek"
+    });
+  });
+  if (strategy !== "basis_path") {
+    const actionLimit = strategy === "full_e2e" ? Math.min(dims.actionNodes.length, 4) : Math.min(dims.actionNodes.length, 2);
+    dims.actionNodes.slice(0, actionLimit).forEach((act, aIdx) => {
+      const targetReqId = requirements[(aIdx + 1) % Math.max(1, requirements.length)]?.id || "FLOW-01";
+      testCases.push({
+        id: `TC-ACT-${String(aIdx + 1).padStart(2, "0")}-NEG`,
+        reqId: targetReqId,
+        module: act.swimlane || graph.processTitle || "\u0130\u015Flem Ad\u0131m\u0131",
+        title: `[Negatif / Kurtarma] "${act.label}" - Hatal\u0131 Girdi & Servis Zaman A\u015F\u0131m\u0131 Geri Alma (Rollback)`,
+        description: isTurkish ? `"${act.label}" aktivite ad\u0131m\u0131nda bozuk/eksik girdi g\xF6nderildi\u011Finde veya harici ba\u011F\u0131ml\u0131l\u0131k zaman a\u015F\u0131m\u0131na u\u011Frad\u0131\u011F\u0131nda i\u015Flemin yar\u0131m kalmadan geri al\u0131nd\u0131\u011F\u0131n\u0131 do\u011Frular.` : `Negative input and timeout rollback validation on action node "${act.label}".`,
+        preconditions: isTurkish ? `Ak\u0131\u015F "${act.label}" ad\u0131m\u0131na gelmi\u015F ve \xF6nceki ad\u0131mlar\u0131n durumu veritaban\u0131nda kay\u0131tl\u0131 olmal\u0131d\u0131r.` : `Workflow reached "${act.label}".`,
+        steps: isTurkish ? [
+          `1. "${act.label}" ad\u0131m\u0131na zorunlu alanlar\u0131 eksik veya hatal\u0131 formatl\u0131 veri g\xF6nderin.`,
+          `2. Ge\xE7erli veriyle tekrar deneyip servis/a\u011F katman\u0131nda zaman a\u015F\u0131m\u0131 (Timeout / HTTP 503) sim\xFCle edin.`,
+          `3. Hata sonras\u0131nda \xF6nceki ad\u0131mlarda olu\u015Fan ge\xE7ici durumlar\u0131n tutarl\u0131 bi\xE7imde korundu\u011Funu veya geri al\u0131nd\u0131\u011F\u0131n\u0131 kontrol edin.`
+        ] : [`1. Submit malformed payload at "${act.label}".`, `2. Simulate timeout.`, `3. Check rollback consistency.`],
+        stepExpectedResults: isTurkish ? [
+          `1. Ad\u0131m i\u015Flenmeden \xF6nce \u015Fema/alan do\u011Frulama hatas\u0131 (HTTP 400/422) d\xF6n\xFClmelidir.`,
+          `2. Zaman a\u015F\u0131m\u0131 durumunda sistem kullan\u0131c\u0131ya anla\u015F\u0131l\u0131r tekrar deneme/hata mesaj\u0131 g\xF6stermelidir.`,
+          `3. Yetim (orphan) kay\u0131t veya tutars\u0131z durum olu\u015Fmamal\u0131; telafi/rollback mekanizmas\u0131 \xE7al\u0131\u015Fmal\u0131d\u0131r.`
+        ] : ["1. Schema error 400/422 returned.", "2. Timeout surfaced cleanly.", "3. No orphaned partial state."],
+        testData: isTurkish ? "Eksik zorunlu alanlar + 30sn Timeout / HTTP 503" : "Invalid payload + HTTP 503 timeout",
+        expectedResult: isTurkish ? `"${act.label}" ad\u0131m\u0131ndaki hatalar sonraki d\xFC\u011F\xFCmlere s\u0131zmamal\u0131 ve veri b\xFCt\xFCnl\xFC\u011F\xFC korunmal\u0131d\u0131r.` : `Failures at "${act.label}" remain isolated with clean rollback.`,
+        priority: "Y\xFCksek",
+        testType: "Negatif (Hata Y\xF6netimi)",
+        executionType: "Manuel",
+        severity: "Kritik"
+      });
+    });
+  }
+  if (config?.includeSecurity !== false || strategy === "full_e2e") {
+    const handoffTarget = dims.swimlaneHandoffs[0];
+    const secReqId = requirements[0]?.id || "FLOW-01";
+    testCases.push({
+      id: `TC-SEC-HANDOFF-01`,
+      reqId: secReqId,
+      module: handoffTarget ? `${handoffTarget.fromSwimlane} \u2192 ${handoffTarget.toSwimlane}` : graph.processTitle,
+      title: handoffTarget ? `[G\xFCvenlik / Rol Devri] ${handoffTarget.fromSwimlane} \u2192 ${handoffTarget.toSwimlane} Yetkisiz Ge\xE7i\u015F Engeli` : `[G\xFCvenlik / Durum B\xFCt\xFCnl\xFC\u011F\xFC] S\xFCre\xE7 Ad\u0131m\u0131 Atlama (State-Skip) & Yetkisiz Tetikleme Engeli`,
+      description: isTurkish ? handoffTarget ? `"${handoffTarget.fromSwimlane}" rol\xFCndeki kullan\u0131c\u0131n\u0131n "${handoffTarget.toSwimlane}" alan\u0131ndaki "${handoffTarget.toLabel}" ad\u0131m\u0131n\u0131 do\u011Frudan tetikleyemedi\u011Fini ve karar ad\u0131mlar\u0131n\u0131n atlanamad\u0131\u011F\u0131n\u0131 do\u011Frular.` : `Kullan\u0131c\u0131n\u0131n ara karar/do\u011Frulama d\xFC\u011F\xFCmlerini atlayarak do\u011Frudan biti\u015F/onay durumuna ge\xE7emedi\u011Fini (Workflow Bypass / IDOR) do\u011Frular.` : `Verify swimlane role isolation and workflow state-skip protection.`,
+      preconditions: isTurkish ? `D\xFC\u015F\xFCk yetkili oturum (veya ba\u015Flang\u0131\xE7 a\u015Famas\u0131ndaki i\u015Flem ID) haz\u0131r olmal\u0131d\u0131r.` : `Lower-privilege session and active flow ID ready.`,
+      steps: isTurkish ? [
+        handoffTarget ? `1. "${handoffTarget.fromSwimlane}" rol\xFCne ait oturumla i\u015Flemi "${handoffTarget.fromLabel}" a\u015Famas\u0131na getirin.` : `1. S\xFCreci ba\u015Flang\u0131\xE7 d\xFC\u011F\xFCm\xFCnden ba\u015Flat\u0131p ge\xE7erli bir i\u015Flem kimli\u011Fi al\u0131n.`,
+        handoffTarget ? `2. Yetkisiz ayn\u0131 oturumla do\u011Frudan "${handoffTarget.toSwimlane}" katman\u0131ndaki "${handoffTarget.toLabel}" u\xE7 noktas\u0131n\u0131 \xE7a\u011F\u0131r\u0131n.` : `2. Ara karar d\xFC\u011F\xFCm\xFCn\xFC tamamlamadan do\u011Frudan biti\u015F/onay d\xFC\u011F\xFCm\xFCne API/URL iste\u011Fi g\xF6nderin.`,
+        `3. \u0130stek yan\u0131t\u0131n\u0131, g\xFCvenlik/audit logunu ve s\xFCre\xE7 durumunun de\u011Fi\u015Fmedi\u011Fini do\u011Frulay\u0131n.`
+      ] : ["1. Start process.", "2. Attempt direct call to privileged/terminal step.", "3. Confirm 403/409 block."],
+      stepExpectedResults: isTurkish ? [
+        "1. \u0130\u015Flem ba\u015Flang\u0131\xE7 durumu aktif olarak do\u011Frulanmal\u0131d\u0131r.",
+        "2. Sistem yetki ihlalini veya ge\xE7ersiz durum ge\xE7i\u015Fini yakalayarak HTTP 403 Forbidden / 409 Conflict ile reddetmelidir.",
+        "3. S\xFCre\xE7 durumu ilerlememeli ve g\xFCvenlik denetim kayd\u0131 (Audit Log) olu\u015Fturulmal\u0131d\u0131r."
+      ] : ["1. Active flow.", "2. Blocked with HTTP 403/409.", "3. State unchanged and audited."],
+      testData: isTurkish ? "Yetkisiz rol token\u0131 / ara ad\u0131m atlanm\u0131\u015F state payload" : "Unauthorized role token / skipped state",
+      expectedResult: isTurkish ? "Yetkisiz swimlane ge\xE7i\u015Fi ve durum atlama giri\u015Fimleri kesinlikle engellenmelidir." : "Unauthorized transitions and state skipping are strictly blocked.",
+      priority: "Y\xFCksek",
+      testType: "G\xFCvenlik ve Yetki Testi (Security)",
+      executionType: "Manuel",
+      severity: "Kritik"
+    });
+    testCases.push({
+      id: `TC-SEC-STATESKIP-02`,
+      reqId: secReqId,
+      module: graph.processTitle || "S\xFCre\xE7 G\xFCvenli\u011Fi",
+      title: `[G\xFCvenlik / State-Skip] Karar Kap\u0131lar\u0131n\u0131 Atlayarak Do\u011Frudan Sonu\xE7 D\xFC\u011F\xFCm\xFCne Ge\xE7i\u015F Engeli`,
+      description: isTurkish ? `\xD6nceki do\u011Frulama ve karar d\xFC\u011F\xFCmleri ("${dims.decisions[0]?.label || "Karar Ad\u0131m\u0131"}") tamamlanmadan do\u011Frudan onay/tamamlanma ad\u0131m\u0131n\u0131n tetiklenemedi\u011Fini do\u011Frular.` : `Verify prior decision gates cannot be bypassed to reach terminal approval directly.`,
+      preconditions: isTurkish ? `S\xFCre\xE7 hen\xFCz ba\u015Flang\u0131\xE7 a\u015Famas\u0131nda ("Ba\u015Flat\u0131ld\u0131" durumunda) ve karar kap\u0131lar\u0131 ge\xE7ilmemi\u015F olmal\u0131d\u0131r.` : `Process in initial state without clearing decision gates.`,
+      steps: isTurkish ? [
+        `1. S\xFCreci ba\u015Flat\u0131p yaln\u0131zca ilk ad\u0131m durumundaki i\u015Flem kimli\u011Fini (Transaction/Case ID) al\u0131n.`,
+        `2. "${dims.decisions[0]?.label || "Karar Noktas\u0131"}" onaylanmadan do\u011Frudan nihai onay/biti\u015F API veya ad\u0131m \xE7a\u011Fr\u0131s\u0131n\u0131 g\xF6nderin.`,
+        `3. Durum makinesinin ge\xE7i\u015Fi reddetti\u011Fini ve s\xFCre\xE7 durumunun de\u011Fi\u015Fmedi\u011Fini teyit edin.`
+      ] : ["1. Init process ID.", "2. Call terminal endpoint bypassing decision gates.", "3. Confirm rejection."],
+      stepExpectedResults: isTurkish ? [
+        "1. \u0130\u015Flem ba\u015Flang\u0131\xE7 durumunda kay\u0131tl\u0131 olmal\u0131d\u0131r.",
+        "2. Sunucu durum makinesi ge\xE7ersiz durum ge\xE7i\u015Fini (Invalid State Transition) HTTP 409 Conflict / 403 ile engellemelidir.",
+        "3. S\xFCre\xE7 durumu ilerlememeli ve g\xFCvenlik ihlali uyar\u0131s\u0131 loglanmal\u0131d\u0131r."
+      ] : ["1. Initial state recorded.", "2. HTTP 409/403 returned.", "3. State unchanged."],
+      testData: isTurkish ? "state=INIT iken target=COMPLETED baypas iste\u011Fi" : "state=INIT bypass payload",
+      expectedResult: isTurkish ? "Durum atlama (Workflow Bypass) giri\u015Fimi kesinlikle engellenmelidir." : "Workflow bypass attempts strictly blocked.",
+      priority: "Y\xFCksek",
+      testType: "G\xFCvenlik ve Yetki Testi (Security)",
+      executionType: "Manuel",
+      severity: "Kritik"
+    });
+  }
+  if (config?.includePerformance || dims.parallelNodes.length > 0 || strategy === "full_e2e") {
+    const perfReqId = requirements[0]?.id || "FLOW-01";
+    testCases.push({
+      id: `TC-PERF-FLOW-01`,
+      reqId: perfReqId,
+      module: graph.processTitle || "Performans",
+      title: `[Performans / E\u015Fzamanl\u0131l\u0131k] E\u015Fzamanl\u0131 S\xFCre\xE7 Ak\u0131\u015F\u0131 Y\xFCk\xFC & Paralel Dal SLA Do\u011Frulamas\u0131`,
+      description: isTurkish ? `Ayn\u0131 anda \xE7oklu s\xFCre\xE7 ak\u0131\u015F\u0131n\u0131n ve ${dims.parallelNodes.length > 0 ? "paralel fork/join dallar\u0131n\u0131n" : "karar kap\u0131lar\u0131n\u0131n"} belirlenen yan\u0131t s\xFCresi (SLA) i\xE7inde kilitlenmeden tamamland\u0131\u011F\u0131n\u0131 do\u011Frular.` : `Concurrent workflow execution and SLA throughput verification.`,
+      preconditions: isTurkish ? `Y\xFCk test ortam\u0131 haz\u0131r, veritaban\u0131 ba\u011Flant\u0131 havuzu ve kuyruk t\xFCketicileri aktif olmal\u0131d\u0131r.` : `Load environment ready.`,
+      steps: isTurkish ? [
+        `1. S\xFCre\xE7 ba\u015Flang\u0131\xE7 noktas\u0131na saniyede 25 e\u015Fzamanl\u0131 istek g\xF6ndererek paralel ak\u0131\u015Flar\u0131 tetikleyin.`,
+        `2. Karar kap\u0131lar\u0131 ve harici servis ad\u0131mlar\u0131nda ortalama/P95 yan\u0131t s\xFCrelerini \xF6l\xE7\xFCn.`,
+        `3. Tamamlanan ak\u0131\u015Flarda deadlock, yar\u0131\u015F durumu (race condition) veya kuyruk birikmesi olmad\u0131\u011F\u0131n\u0131 kontrol edin.`
+      ] : ["1. Trigger 25 req/s concurrent flows.", "2. Measure P95 latency.", "3. Verify zero deadlocks."],
+      stepExpectedResults: isTurkish ? [
+        "1. T\xFCm e\u015Fzamanl\u0131 s\xFCre\xE7 \xF6rnekleri kuyru\u011Fa hatas\u0131z al\u0131nmal\u0131d\u0131r.",
+        "2. P95 u\xE7tan uca i\u015Flem tamamlama s\xFCresi tan\u0131ml\u0131 SLA e\u015Fi\u011Finin (< 2000ms) alt\u0131nda kalmal\u0131d\u0131r.",
+        "3. Deadlock, veri \xE7ak\u0131\u015Fmas\u0131 veya HTTP 5xx hatas\u0131 %0 olmal\u0131d\u0131r."
+      ] : ["1. All requests queued cleanly.", "2. P95 < 2000ms SLA.", "3. Zero deadlocks or 5xx errors."],
+      testData: isTurkish ? "25 RPS e\u015Fzamanl\u0131 s\xFCre\xE7 y\xFCk\xFC, 60 sn s\xFCre" : "25 RPS concurrent load for 60s",
+      expectedResult: isTurkish ? "E\u015Fzamanl\u0131 s\xFCre\xE7 ak\u0131\u015Flar\u0131 SLA i\xE7inde hatas\u0131z tamamlanmal\u0131d\u0131r." : "Concurrent flows complete within SLA cleanly.",
+      priority: "Orta",
+      testType: "Performans ve \xD6l\xE7eklenebilirlik (Performance)",
+      executionType: "Otomasyon",
+      severity: "Orta"
+    });
+  }
+  const decisionCount = Math.max(
+    dims.decisions.length,
+    graph.nodes.filter((n) => n.type === "decision").length
+  );
+  return {
+    requirements,
+    testCases,
+    diagramAnalysis: {
+      processTitle: graph.processTitle,
+      formatDetected: graph.formatDetected,
+      nodeCount: graph.nodes.length,
+      decisionCount,
+      swimlanes: graph.swimlanes,
+      paths: pathInfos,
+      analyzedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }
+  };
+}
+async function invokeDiagramAIJson({
+  geminiKey,
+  modelsToTry,
+  systemPrompt,
+  contents,
+  responseSchema,
+  timeoutPerModelMs,
+  callOpenRouterFallback,
+  openRouterUserPrompt,
+  isAllQuotaExhausted,
+  isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+  markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+  checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2,
+  tag
+}) {
+  if (geminiKey && !(isGeminiQuotaExhausted2 && isGeminiQuotaExhausted2()) && !(isAllQuotaExhausted && isAllQuotaExhausted())) {
+    const ai = new GoogleGenAI({
+      apiKey: geminiKey,
+      httpOptions: { headers: { "User-Agent": "aistudio-build" } }
+    });
+    for (const model of modelsToTry) {
+      try {
+        const apiCall = ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction: systemPrompt,
+            responseMimeType: "application/json",
+            responseSchema,
+            ...model.startsWith("gemini-4-") ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}
+          }
+        });
+        const timeoutPromise = new Promise(
+          (_, reject) => setTimeout(
+            () => reject(new Error(`Response threshold (${timeoutPerModelMs}ms) reached on ${model}`)),
+            timeoutPerModelMs
+          )
+        );
+        const response = await Promise.race([apiCall, timeoutPromise]);
+        const rawText = (response?.text || "").trim();
+        if (rawText) {
+          const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+          const parsed = JSON.parse(cleaned);
+          console.log(`[Diagram AI:${tag}] SUCCESS with '${model}'`);
+          return parsed;
+        }
+      } catch (err) {
+        const msg = String(err?.message || "");
+        const isThresholdTimeout = msg.includes("Response threshold");
+        if (checkIsQuotaExhaustedError2) {
+          const q = checkIsQuotaExhaustedError2(err);
+          if (q.isQuota && markGeminiQuotaExhausted2) {
+            console.info(`[Diagram AI:${tag}] Quota limit reached on '${model}', switching to fallback engine.`);
+            markGeminiQuotaExhausted2(q.retrySeconds, q.reason);
+            break;
+          }
+        }
+        if (isThresholdTimeout) {
+          console.info(`[Diagram AI:${tag}] '${model}' exceeded ${timeoutPerModelMs}ms threshold; handing off cleanly.`);
+          return null;
+        }
+        console.info(`[Diagram AI:${tag}] Rotating from '${model}' (${msg || "unavailable"})...`);
+      }
+    }
+  }
+  if (openRouterUserPrompt && callOpenRouterFallback && !(isAllQuotaExhausted && isAllQuotaExhausted())) {
+    try {
+      const orRes = await callOpenRouterFallback({
+        systemPrompt,
+        userPrompt: openRouterUserPrompt,
+        timeoutMs: 5e3
+      });
+      if (orRes?.text) {
+        const cleaned = orRes.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+        const firstBrace = cleaned.indexOf("{");
+        const firstBracket = cleaned.indexOf("[");
+        const start = firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace) ? firstBracket : firstBrace;
+        const end = start === firstBracket ? cleaned.lastIndexOf("]") : cleaned.lastIndexOf("}");
+        if (start !== -1 && end > start) {
+          return JSON.parse(cleaned.slice(start, end + 1));
+        }
+      }
+    } catch (orErr) {
+      console.info(`[Diagram AI:${tag}] OpenRouter fallback unavailable:`, orErr?.message || orErr);
+    }
+  }
+  return null;
+}
+async function extractDiagramGraphFromImage({
+  diagramImageBase64,
+  diagramImageMimeType,
+  diagramFileName,
+  geminiKey,
+  isAllQuotaExhausted,
+  isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+  markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+  checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2
+}) {
+  const cleanBase64 = diagramImageBase64.replace(/^data:[^;]+;base64,/, "");
+  const graphSchema = {
+    type: Type.OBJECT,
+    properties: {
+      processTitle: { type: Type.STRING },
+      swimlanes: { type: Type.ARRAY, items: { type: Type.STRING } },
+      nodes: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.STRING },
+            label: { type: Type.STRING },
+            type: { type: Type.STRING },
+            swimlane: { type: Type.STRING }
+          },
+          required: ["id", "label", "type"]
+        }
+      },
+      edges: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            from: { type: Type.STRING },
+            to: { type: Type.STRING },
+            label: { type: Type.STRING },
+            isNegative: { type: Type.BOOLEAN }
+          },
+          required: ["from", "to"]
+        }
+      }
+    },
+    required: ["processTitle", "nodes", "edges"]
+  };
+  const visionPrompt = `Analyze this Activity Diagram / Flowchart / BPMN image thoroughly and transcribe EVERY node, swimlane, decision diamond, loop arrow, fork/join bar, and transition edge into JSON.
+${diagramFileName ? `File Name: ${diagramFileName}` : ""}
+RULES:
+- "type" MUST be one of: "start", "end", "action", "decision", "fork_join".
+- Read every decision diamond and its outgoing branch labels (e.g., "Yes"/"No", "Evet"/"Hay\u0131r", error codes, conditions).
+- Include ALL nodes and edges faithfully so every flow path can be enumerated.`;
+  const extracted = await invokeDiagramAIJson({
+    geminiKey,
+    modelsToTry: ["gemini-4-hydrogen", "gemini-3.1-flash-lite"],
+    systemPrompt: "You are an expert UML/BPMN diagram OCR & graph extraction engine. Output strictly valid JSON matching schema.",
+    contents: {
+      parts: [
+        { inlineData: { mimeType: diagramImageMimeType, data: cleanBase64 } },
+        { text: visionPrompt }
+      ]
+    },
+    responseSchema: graphSchema,
+    timeoutPerModelMs: 16e3,
+    isAllQuotaExhausted,
+    isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+    markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+    checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2,
+    tag: "VisionGraph"
+  });
+  if (!extracted || !Array.isArray(extracted.nodes) || extracted.nodes.length === 0) {
+    return null;
+  }
+  const nodes = extracted.nodes.map((n, idx) => ({
+    id: String(n.id || `N_${idx + 1}`).trim(),
+    label: String(n.label || n.id || `Ad\u0131m ${idx + 1}`).trim(),
+    type: ["start", "end", "action", "decision", "fork_join"].includes(n.type) ? n.type : "action",
+    swimlane: n.swimlane ? String(n.swimlane).trim() : void 0
+  }));
+  const edges = Array.isArray(extracted.edges) ? extracted.edges.map((e) => ({
+    from: String(e.from || "").trim(),
+    to: String(e.to || "").trim(),
+    label: e.label ? String(e.label).trim() : void 0,
+    isNegative: typeof e.isNegative === "boolean" ? e.isNegative : e.label ? NEGATIVE_BRANCH_REGEX.test(String(e.label)) : false
+  })).filter((e) => e.from && e.to) : [];
+  const paths = enumerateProcessPaths(nodes, edges);
+  const swimlanes = Array.isArray(extracted.swimlanes) ? extracted.swimlanes.map((s) => String(s).trim()).filter(Boolean) : Array.from(new Set(nodes.map((n) => n.swimlane).filter((s) => Boolean(s))));
+  return {
+    formatDetected: "image",
+    processTitle: String(extracted.processTitle || diagramFileName || "G\xF6rsel S\xFCre\xE7 Diyagram\u0131").replace(/\.[^.]+$/, ""),
+    swimlanes,
+    nodes,
+    edges,
+    paths
+  };
+}
+async function analyzeDiagramAndGenerateTests({
+  diagramText,
+  diagramImageBase64,
+  diagramImageMimeType,
+  diagramFileName,
+  coverageStrategy = "branch",
+  corporateRules = [],
+  config = {},
+  isTurkish = true,
+  callOpenRouterFallback,
+  isAllQuotaExhausted,
+  isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+  markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+  checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2
+}) {
+  const customInstructions = String(config?.customInstructions || "").trim();
+  const activeRules = Array.isArray(corporateRules) ? corporateRules.filter((r) => r.isDefaultActive !== false) : [];
+  const rulesPrompt = activeRules.length > 0 ? `
+ACTIVE CORPORATE QA RULES:
+${activeRules.map((r) => `- [${r.title}]: ${r.promptRule}`).join("\n")}` : "";
+  const customGuidancePrompt = customInstructions ? `
+MANDATORY CUSTOM USER INSTRUCTIONS (MUST BE REFLECTED IN STEPS & TEST DATA):
+${customInstructions}` : "";
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const hasImage = Boolean(diagramImageBase64 && diagramImageMimeType);
+  const textParsedGraph = diagramText && diagramText.trim() ? parseActivityDiagramText(diagramText) : null;
+  let workingGraph = textParsedGraph && textParsedGraph.nodes.length > 0 ? textParsedGraph : null;
+  if (!workingGraph && hasImage && diagramImageBase64 && diagramImageMimeType) {
+    workingGraph = await extractDiagramGraphFromImage({
+      diagramImageBase64,
+      diagramImageMimeType,
+      diagramFileName,
+      geminiKey,
+      isAllQuotaExhausted,
+      isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+      markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+      checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2
+    });
+  }
+  let finalRequirements = [];
+  let finalTestCases = [];
+  let finalAnalysis = null;
+  if (workingGraph && workingGraph.nodes.length > 0) {
+    const synth = synthesizeTestCasesFromDiagramGraph(workingGraph, coverageStrategy, config, isTurkish);
+    const dims = extractGraphDimensions(workingGraph);
+    const targetPathsForAI = coverageStrategy === "basis_path" ? workingGraph.paths.slice(0, 8) : coverageStrategy === "full_e2e" ? workingGraph.paths.slice(0, 16) : workingGraph.paths.slice(0, 12);
+    const pathChunks = [];
+    const PATH_CHUNK_SIZE = 3;
+    for (let i = 0; i < targetPathsForAI.length; i += PATH_CHUNK_SIZE) {
+      pathChunks.push(targetPathsForAI.slice(i, i + PATH_CHUNK_SIZE));
+    }
+    const tcBatchSchema = {
+      type: Type.OBJECT,
+      properties: {
+        testCases: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              reqId: { type: Type.STRING },
+              module: { type: Type.STRING },
+              title: { type: Type.STRING },
+              description: { type: Type.STRING },
+              preconditions: { type: Type.STRING },
+              steps: { type: Type.ARRAY, items: { type: Type.STRING } },
+              stepExpectedResults: { type: Type.ARRAY, items: { type: Type.STRING } },
+              testData: { type: Type.STRING },
+              expectedResult: { type: Type.STRING },
+              priority: { type: Type.STRING },
+              testType: { type: Type.STRING },
+              executionType: { type: Type.STRING },
+              severity: { type: Type.STRING }
+            },
+            required: ["id", "reqId", "module", "title", "steps", "stepExpectedResults", "expectedResult", "priority", "testType"]
+          }
+        }
+      },
+      required: ["testCases"]
+    };
+    const langDirective = isTurkish ? "TURKISH" : "ENGLISH";
+    const baseSystemPrompt = `You are a Principal Software QA Architect & ISTQB Expert specializing in deep Activity Diagram & Model-Based Testing.
+LANGUAGE: Write EVERY field strictly in ${langDirective}.
+${rulesPrompt}
+${customGuidancePrompt}
+STRICT RULES:
+1. NEVER compress or skip intermediate diagram steps. Trace EVERY node in the path explicitly as numbered steps ("1. ...", "2. ...").
+2. "stepExpectedResults" MUST be a 1-to-1 matching array of exact verifiable system expectations (same length as "steps").
+3. Include realistic domain-specific "testData" (amounts, role tokens, HTTP codes, boundary thresholds) \u2014 never generic placeholders.
+4. "testType" MUST be one of: "Pozitif (Fonksiyonel Do\u011Fruluk)", "Negatif (Hata Y\xF6netimi)", "Durum Ge\xE7i\u015F Testi (State Transition)", "Karar Tablosu Testi (Decision Table)", "S\u0131n\u0131r De\u011Fer Analizi (BVA)", "Kullan\u0131m Senaryosu Testi (Use Case)", "G\xFCvenlik ve Yetki Testi (Security)", "Performans ve \xD6l\xE7eklenebilirlik (Performance)".
+5. Every testCase "reqId" MUST match one of the provided "FLOW-XX" IDs. Return ONLY valid JSON.`;
+    const aiAvailable = Boolean(geminiKey) && !(isGeminiQuotaExhausted2 && isGeminiQuotaExhausted2()) && !(isAllQuotaExhausted && isAllQuotaExhausted());
+    const batchPromises = [];
+    if (aiAvailable) {
+      pathChunks.forEach((chunk, chunkIdx) => {
+        const pathSpecs = chunk.map((p) => {
+          const linkedReq = synth.requirements.find((r) => r.title === p.name)?.id || `FLOW-${String(workingGraph.paths.indexOf(p) + 1).padStart(2, "0")}`;
+          const caseGoal = p.pathType === "happy" || p.hasLoop || p.isParallel ? "Generate 2 cases: (1) Full Node-by-Node E2E Path Test, (2) State/Idempotency/Retry-Limit Variant" : "Generate 1 thorough Node-by-Node E2E test case tracing all nodes & branch condition";
+          return `- ${p.id} (reqId: ${linkedReq}, type: ${p.pathType}, swimlanes: [${p.swimlanes.join(", ") || workingGraph.processTitle}]):
+  Nodes (${p.nodeLabels.length}): ${p.nodeLabels.join(" -> ")}
+  Conditions: ${p.conditions.join(" | ") || "Sequential"}
+  Goal: ${caseGoal}`;
+        }).join("\n\n");
+        const userPrompt = `Process Title: ${workingGraph.processTitle}
+Generate node-by-node test cases for these ${chunk.length} Activity Diagram paths (map every node in "Nodes" to a numbered step!):
+
+${pathSpecs}`;
+        batchPromises.push(
+          invokeDiagramAIJson({
+            geminiKey,
+            modelsToTry: ["gemini-3.1-flash-lite", "gemini-4-hydrogen"],
+            systemPrompt: baseSystemPrompt,
+            contents: userPrompt,
+            responseSchema: tcBatchSchema,
+            timeoutPerModelMs: 9e3,
+            callOpenRouterFallback,
+            openRouterUserPrompt: `${baseSystemPrompt}
+
+${userPrompt}`,
+            isAllQuotaExhausted,
+            isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+            markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+            checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2,
+            tag: `PathsBatch-${chunkIdx + 1}`
+          }).then((res) => Array.isArray(res?.testCases) ? res.testCases : [])
+        );
+      });
+      const reqIdsList = synth.requirements.map((r) => r.id).slice(0, 12).join(", ") || "FLOW-01";
+      if (dims.decisions.length > 0) {
+        const decSpecs = dims.decisions.slice(0, coverageStrategy === "full_e2e" ? 8 : 5).map(
+          (d, i) => `${i + 1}. "${d.label}" -> ${d.branches.map((b) => `[${b.label}]=>${b.targetLabel}`).join(", ")}`
+        ).join("\n");
+        const decPrompt = `Process Title: ${workingGraph.processTitle}
+Valid reqIds: [${reqIdsList}]
+Generate 1 BVA or Decision Table test case for EACH decision diamond below (boundary min/exact/max+1/null):
+${decSpecs}`;
+        batchPromises.push(
+          invokeDiagramAIJson({
+            geminiKey,
+            modelsToTry: ["gemini-3.1-flash-lite", "gemini-4-hydrogen"],
+            systemPrompt: baseSystemPrompt,
+            contents: decPrompt,
+            responseSchema: tcBatchSchema,
+            timeoutPerModelMs: 9e3,
+            callOpenRouterFallback,
+            openRouterUserPrompt: `${baseSystemPrompt}
+
+${decPrompt}`,
+            isAllQuotaExhausted,
+            isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+            markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+            checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2,
+            tag: "DeepQA-Decisions"
+          }).then((res) => Array.isArray(res?.testCases) ? res.testCases : [])
+        );
+      }
+      if (coverageStrategy !== "basis_path" && (dims.actionNodes.length > 0 || dims.swimlaneHandoffs.length > 0)) {
+        const handoffSpecs = dims.swimlaneHandoffs.slice(0, 5).map((h, i) => `${i + 1}. ${h.fromSwimlane}(${h.fromLabel}) -> ${h.toSwimlane}(${h.toLabel})`).join("\n");
+        const actionSpecs = dims.actionNodes.slice(0, 5).map((a) => `- "${a.label}"`).join("\n");
+        const secNegPrompt = `Process Title: ${workingGraph.processTitle}
+Valid reqIds: [${reqIdsList}]
+Generate 5 targeted QA test cases (4-6 steps each):
+1. Invalid payload & timeout/HTTP 503 rollback on key Actions:
+${actionSpecs || "- Main action nodes"}
+2. Role authorization & State-Skip bypass security ("G\xFCvenlik ve Yetki Testi (Security)") on Swimlanes:
+${handoffSpecs || "Single-actor flow (test bypassing decision gates to jump to terminal node)"}`;
+        batchPromises.push(
+          invokeDiagramAIJson({
+            geminiKey,
+            modelsToTry: ["gemini-3.1-flash-lite", "gemini-4-hydrogen"],
+            systemPrompt: baseSystemPrompt,
+            contents: secNegPrompt,
+            responseSchema: tcBatchSchema,
+            timeoutPerModelMs: 9e3,
+            callOpenRouterFallback,
+            openRouterUserPrompt: `${baseSystemPrompt}
+
+${secNegPrompt}`,
+            isAllQuotaExhausted,
+            isGeminiQuotaExhausted: isGeminiQuotaExhausted2,
+            markGeminiQuotaExhausted: markGeminiQuotaExhausted2,
+            checkIsQuotaExhaustedError: checkIsQuotaExhaustedError2,
+            tag: "DeepQA-SecNeg"
+          }).then((res) => Array.isArray(res?.testCases) ? res.testCases : [])
+        );
+      }
+    }
+    const batchResults = batchPromises.length > 0 ? await Promise.all(batchPromises) : [];
+    const aiRawCases = batchResults.flat();
+    finalRequirements = synth.requirements;
+    finalAnalysis = synth.diagramAnalysis;
+    if (aiRawCases.length > 0) {
+      const validReqSet = new Set(finalRequirements.map((r) => r.id));
+      const normalizedAiCases = aiRawCases.map((tc, idx) => {
+        const candidateReqId = String(tc.reqId || "").trim();
+        const resolvedReqId = validReqSet.has(candidateReqId) ? candidateReqId : finalRequirements[idx % finalRequirements.length]?.id || "FLOW-01";
+        const steps = Array.isArray(tc.steps) && tc.steps.length > 0 ? tc.steps.map((s, sIdx) => {
+          const clean = String(s || "").trim();
+          return /^\d+[\.\)]\s*/.test(clean) ? clean : `${sIdx + 1}. ${clean}`;
+        }) : ["1. S\xFCreci ba\u015Flat\u0131n.", "2. Karar ko\u015Fulunu do\u011Frulay\u0131n."];
+        const overallExp = tc.expectedResult || (isTurkish ? "S\xFCre\xE7 beklenen hedef d\xFC\u011F\xFCme hatas\u0131z ula\u015Fmal\u0131d\u0131r." : "Process reaches expected node.");
+        const stepExpectedResults = steps.map((st, sIdx) => {
+          const provided = Array.isArray(tc.stepExpectedResults) ? tc.stepExpectedResults[sIdx] : "";
+          if (provided && String(provided).trim()) {
+            const clean = String(provided).trim();
+            return /^\d+[\.\)]\s*/.test(clean) ? clean : `${sIdx + 1}. ${clean}`;
+          }
+          if (sIdx === steps.length - 1) return `${sIdx + 1}. ${overallExp.replace(/^\d+[\.\)]\s*/, "")}`;
+          return `${sIdx + 1}. ${st.replace(/^\d+[\.\)]\s*/, "")} ad\u0131m\u0131 ba\u015Far\u0131yla tamamlanmal\u0131d\u0131r.`;
+        });
+        return {
+          id: tc.id || `TC-${resolvedReqId}-${String(idx + 1).padStart(2, "0")}`,
+          reqId: resolvedReqId,
+          module: tc.module || workingGraph.processTitle || "S\xFCre\xE7 Ak\u0131\u015F\u0131",
+          title: tc.title || `S\xFCre\xE7 Senaryosu ${idx + 1}`,
+          description: tc.description || tc.title || "",
+          preconditions: tc.preconditions || (isTurkish ? "Sistem aktif ve s\xFCre\xE7 \xF6n ko\u015Fullar\u0131 haz\u0131r olmal\u0131d\u0131r." : "System active."),
+          steps,
+          stepExpectedResults,
+          testData: tc.testData || (isTurkish ? "S\xFCre\xE7 karar ve do\u011Frulama verisi" : "Process test data"),
+          expectedResult: overallExp,
+          priority: tc.priority || "Y\xFCksek",
+          testType: tc.testType || "Pozitif (Fonksiyonel Do\u011Fruluk)",
+          executionType: tc.executionType || "Manuel",
+          severity: tc.severity || "Normal"
+        };
+      });
+      const merged = [...normalizedAiCases];
+      const coveredReqIds = new Set(merged.map((c) => c.reqId));
+      const extractQuoteTopic = (t) => {
+        const m = String(t || "").match(/"([^"]{3,})"/);
+        return m ? m[1].toLowerCase().slice(0, 18) : "";
+      };
+      synth.testCases.forEach((sc) => {
+        if (sc.id.startsWith("TC-FLOW-") && sc.id.endsWith("-01") && !coveredReqIds.has(sc.reqId)) {
+          merged.push(sc);
+          coveredReqIds.add(sc.reqId);
+        } else if (sc.id.startsWith("TC-FLOW-") && sc.id.endsWith("-02")) {
+          const alreadyHasVariant = merged.some(
+            (m) => m.reqId === sc.reqId && (/idempotency|döngü|tekrar|eşzamanlı|parallel|limit|çift/i.test(m.title || "") || String(m.testType || "").includes("Durum Ge\xE7i\u015F"))
+          );
+          if (!alreadyHasVariant) merged.push(sc);
+        } else if (sc.id.startsWith("TC-DEC-")) {
+          const topic = extractQuoteTopic(sc.title);
+          const alreadyHasDecBva = merged.some(
+            (m) => topic && String(m.title + " " + m.description).toLowerCase().includes(topic) && /sınır|bva|karar|threshold|boundary/i.test(String(m.testType + " " + m.title))
+          );
+          if (!alreadyHasDecBva) merged.push(sc);
+        } else if (sc.id.startsWith("TC-ACT-")) {
+          const topic = extractQuoteTopic(sc.title);
+          const alreadyHasActNeg = merged.some(
+            (m) => topic && String(m.title + " " + m.description).toLowerCase().includes(topic) && String(m.testType || "").includes("Negatif")
+          );
+          if (!alreadyHasActNeg) merged.push(sc);
+        } else if (sc.id.startsWith("TC-SEC-HANDOFF")) {
+          const hasHandoffSec = merged.some(
+            (m) => String(m.testType || "").includes("G\xFCvenlik") && /rol|yetki|swimlane|handoff/i.test(String(m.title || ""))
+          );
+          if (!hasHandoffSec) merged.push(sc);
+        } else if (sc.id.startsWith("TC-SEC-STATESKIP")) {
+          const hasSkipSec = merged.some(
+            (m) => String(m.testType || "").includes("G\xFCvenlik") && /atlama|skip|baypas|bypass|durum/i.test(String(m.title + " " + m.description))
+          );
+          if (!hasSkipSec) merged.push(sc);
+        } else if (sc.id.startsWith("TC-PERF-")) {
+          const hasPerf = merged.some((m) => String(m.testType || "").includes("Performans"));
+          if (!hasPerf) merged.push(sc);
+        }
+      });
+      const usedTcIds = /* @__PURE__ */ new Set();
+      finalTestCases = merged.map((tc, idx) => {
+        let tid = String(tc.id || `TC-FLOW-${String(idx + 1).padStart(3, "0")}`).trim();
+        if (usedTcIds.has(tid)) {
+          tid = `TC-${tc.reqId}-${String(idx + 1).padStart(3, "0")}`;
+          while (usedTcIds.has(tid)) tid = `${tid}_X`;
+        }
+        usedTcIds.add(tid);
+        return { ...tc, id: tid };
+      });
+    } else {
+      finalTestCases = synth.testCases;
+    }
+  } else {
+    const title = (diagramFileName || "G\xF6rsel S\xFCre\xE7 Diyagram\u0131").replace(/\.[^.]+$/, "");
+    const customPart = customInstructions ? ` (${customInstructions})` : "";
+    const fallbackTextFlow = `
+flowchart TD
+  Start([Ba\u015Fla: ${title}]) --> Input[Veri Giri\u015Fi & \xD6n Do\u011Frulama]
+  Input --> Check1{Zorunlu Ko\u015Ful & Yetki Ge\xE7erli mi?}
+  Check1 -->|Evet| Process[Ana S\xFCre\xE7 \u0130\u015Flemini Y\xFCr\xFCt]
+  Check1 -->|Hay\u0131r| Reject([Biti\u015F: Do\u011Frulama / Yetki Reddi])
+  Process --> Check2{Harici Servis & Onay Ba\u015Far\u0131l\u0131 m\u0131?}
+  Check2 -->|Evet| Notify[Bildirim G\xF6nder & Logla]
+  Check2 -->|Tekrar Dene| Input
+  Check2 -->|Hata / Zaman A\u015F\u0131m\u0131| Rollback([Biti\u015F: Geri Alma & Hata Kayd\u0131])
+  Notify --> Done([Biti\u015F: S\xFCre\xE7 Tamamland\u0131])
+`;
+    const fallbackGraph = parseActivityDiagramText(fallbackTextFlow);
+    fallbackGraph.processTitle = `${title}${customPart}`;
+    fallbackGraph.formatDetected = "image";
+    const synth = synthesizeTestCasesFromDiagramGraph(fallbackGraph, coverageStrategy, config, isTurkish);
+    finalRequirements = synth.requirements;
+    finalTestCases = synth.testCases;
+    finalAnalysis = synth.diagramAnalysis;
+  }
+  const stats = calculateGenerationStats(finalRequirements, finalTestCases);
+  const recommendations = generateEngineeringRecommendations(
+    finalRequirements,
+    finalTestCases,
+    isTurkish ? "tr" : "en",
+    { action: "initial", customInstructions }
+  );
+  return {
+    requirements: finalRequirements,
+    testCases: finalTestCases,
+    stats,
+    recommendations,
+    diagramAnalysis: finalAnalysis
+  };
 }
 
 // server/app.ts
@@ -574,22 +1861,30 @@ async function callGeminiWithRetry(ai, params) {
       `Gemini quota limit active (until ${new Date(geminiQuotaExhaustedUntil).toLocaleTimeString()}). Routing to OpenRouter.`
     );
   }
-  const requestedModel = params.model || "gemini-3.1-flash-lite";
+  const requestedModel = params.model || "gemini-4-hydrogen";
   const candidateModels = Array.from(
     /* @__PURE__ */ new Set([
       requestedModel,
-      "gemini-3.1-flash-lite",
-      "gemini-3.8-flash",
-      "gemini-flash-latest"
+      "gemini-4-hydrogen",
+      "gemini-3.1-flash-lite"
     ])
   );
   let lastError = null;
   for (const model of candidateModels) {
     try {
       console.log(`[Gemini API] Invoking model '${model}'...`);
+      const nextConfig = params.config ? { ...params.config } : void 0;
+      if (nextConfig && model.startsWith("gemini-4-")) {
+        delete nextConfig.temperature;
+        delete nextConfig.topP;
+        delete nextConfig.topK;
+        delete nextConfig.candidateCount;
+        nextConfig.thinkingConfig = { thinkingLevel: ThinkingLevel2.LOW };
+      }
       const response = await ai.models.generateContent({
         ...params,
-        model
+        model,
+        ...nextConfig ? { config: nextConfig } : {}
       });
       return { response, modelUsed: model };
     } catch (err) {
@@ -640,11 +1935,11 @@ async function generateUnifiedAI({
   if (geminiKey && !isGeminiQuotaExhausted()) {
     try {
       console.log("[AI Pipeline] Invoking Google Gemini engine...");
-      const ai = new GoogleGenAI({
+      const ai = new GoogleGenAI2({
         apiKey: geminiKey,
         httpOptions: { headers: { "User-Agent": "aistudio-build" } }
       });
-      const geminiModel = preferredModel && !isOpenRouterPreferred ? preferredModel : "gemini-3.8-flash";
+      const geminiModel = preferredModel && !isOpenRouterPreferred ? preferredModel : "gemini-4-hydrogen";
       const geminiPromise = callGeminiWithRetry(ai, {
         model: geminiModel,
         contents: [{ role: "user", parts: [{ text: userPrompt }] }],
@@ -2035,24 +3330,24 @@ ${JSON.stringify(chunk, null, 2)}`,
               temperature: 0.25,
               timeoutMs: 6e3,
               geminiSchema: {
-                type: Type.ARRAY,
+                type: Type2.ARRAY,
                 items: {
-                  type: Type.OBJECT,
+                  type: Type2.OBJECT,
                   properties: {
-                    id: { type: Type.STRING },
-                    reqId: { type: Type.STRING },
-                    module: { type: Type.STRING },
-                    title: { type: Type.STRING },
-                    description: { type: Type.STRING },
-                    preconditions: { type: Type.STRING },
-                    steps: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    stepExpectedResults: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    testData: { type: Type.STRING },
-                    expectedResult: { type: Type.STRING },
-                    priority: { type: Type.STRING },
-                    testType: { type: Type.STRING },
-                    executionType: { type: Type.STRING },
-                    severity: { type: Type.STRING }
+                    id: { type: Type2.STRING },
+                    reqId: { type: Type2.STRING },
+                    module: { type: Type2.STRING },
+                    title: { type: Type2.STRING },
+                    description: { type: Type2.STRING },
+                    preconditions: { type: Type2.STRING },
+                    steps: { type: Type2.ARRAY, items: { type: Type2.STRING } },
+                    stepExpectedResults: { type: Type2.ARRAY, items: { type: Type2.STRING } },
+                    testData: { type: Type2.STRING },
+                    expectedResult: { type: Type2.STRING },
+                    priority: { type: Type2.STRING },
+                    testType: { type: Type2.STRING },
+                    executionType: { type: Type2.STRING },
+                    severity: { type: Type2.STRING }
                   },
                   required: ["id", "reqId", "module", "title", "steps", "expectedResult", "priority", "testType"]
                 }
@@ -2434,33 +3729,33 @@ OUTPUT FORMAT:
 }`,
       temperature: 0.3,
       geminiSchema: {
-        type: Type.OBJECT,
+        type: Type2.OBJECT,
         properties: {
           newTestCases: {
-            type: Type.ARRAY,
+            type: Type2.ARRAY,
             items: {
-              type: Type.OBJECT,
+              type: Type2.OBJECT,
               properties: {
-                id: { type: Type.STRING },
-                reqId: { type: Type.STRING },
-                module: { type: Type.STRING },
-                title: { type: Type.STRING },
-                description: { type: Type.STRING },
-                preconditions: { type: Type.STRING },
+                id: { type: Type2.STRING },
+                reqId: { type: Type2.STRING },
+                module: { type: Type2.STRING },
+                title: { type: Type2.STRING },
+                description: { type: Type2.STRING },
+                preconditions: { type: Type2.STRING },
                 steps: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
+                  type: Type2.ARRAY,
+                  items: { type: Type2.STRING }
                 },
                 stepExpectedResults: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
+                  type: Type2.ARRAY,
+                  items: { type: Type2.STRING }
                 },
-                testData: { type: Type.STRING },
-                expectedResult: { type: Type.STRING },
-                priority: { type: Type.STRING },
-                testType: { type: Type.STRING },
-                executionType: { type: Type.STRING },
-                severity: { type: Type.STRING }
+                testData: { type: Type2.STRING },
+                expectedResult: { type: Type2.STRING },
+                priority: { type: Type2.STRING },
+                testType: { type: Type2.STRING },
+                executionType: { type: Type2.STRING },
+                severity: { type: Type2.STRING }
               },
               required: ["id", "reqId", "module", "title", "steps", "expectedResult", "priority", "testType"]
             }
@@ -3008,6 +4303,49 @@ ${JSON.stringify(targetReqs, null, 2)}`,
     console.error("Static test requirements error:", error);
     res.status(500).json({
       error: "Gereksinim statik testi yap\u0131l\u0131rken bir hata olu\u015Ftu.",
+      details: error?.message
+    });
+  }
+});
+app.post("/api/generate-from-diagram", async (req, res) => {
+  try {
+    const {
+      diagramText,
+      diagramImageBase64,
+      diagramImageMimeType,
+      diagramFileName,
+      coverageStrategy = "branch",
+      corporateRules = [],
+      config = {}
+    } = req.body || {};
+    const hasText = typeof diagramText === "string" && diagramText.trim().length > 0;
+    const hasImage = typeof diagramImageBase64 === "string" && diagramImageBase64.trim().length > 0;
+    if (!hasText && !hasImage) {
+      return res.status(400).json({
+        error: "L\xFCtfen bir Activity Diagram / s\xFCre\xE7 \xE7izimi g\xF6rseli y\xFCkleyin veya Mermaid/PlantUML ak\u0131\u015F metni girin."
+      });
+    }
+    const isTurkish = config?.language !== "en";
+    const result = await analyzeDiagramAndGenerateTests({
+      diagramText,
+      diagramImageBase64,
+      diagramImageMimeType,
+      diagramFileName,
+      coverageStrategy,
+      corporateRules,
+      config,
+      isTurkish,
+      callOpenRouterFallback: ({ systemPrompt, userPrompt, timeoutMs }) => callOpenRouterWithFallback({ systemPrompt, userPrompt, timeoutMs }),
+      isAllQuotaExhausted: isAllAIQuotaExhausted,
+      isGeminiQuotaExhausted,
+      markGeminiQuotaExhausted,
+      checkIsQuotaExhaustedError
+    });
+    res.json(result);
+  } catch (error) {
+    console.error("[Diagram Generate Error]", error);
+    res.status(500).json({
+      error: "S\xFCre\xE7 diyagram\u0131 analiz edilip test case \xFCretilirken bir sunucu hatas\u0131 olu\u015Ftu.",
       details: error?.message
     });
   }

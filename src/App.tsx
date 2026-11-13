@@ -12,8 +12,10 @@ import { UserGuideModal } from './components/UserGuideModal';
 import { ConfigurationHubModal, ConfigTab } from './components/ConfigurationHubModal';
 import { ProjectBar } from './components/ProjectBar';
 import { ShareProjectModal } from './components/ShareProjectModal';
+import { DiagramImagePayload } from './components/ActivityDiagramPanel';
 import { PRESET_TEMPLATES } from './data/presetTemplates';
 import { SAMPLE_REQUIREMENT_DOCS } from './data/sampleRequirements';
+import { SAMPLE_ACTIVITY_DIAGRAMS } from './data/sampleDiagrams';
 import { AuthScreen } from './components/AuthScreen';
 import {
   loadUserDataFromCloud,
@@ -43,6 +45,8 @@ import {
   CorporateMemoryRule,
   RequirementStaticTestReport,
   OverallStaticTestSummary,
+  DiagramCoverageStrategy,
+  DiagramAnalysisSummary,
 } from './types';
 import { exportTestCasesToExcel } from './utils/excelHelper';
 import { generateNextTestCaseId, sortTestCasesById, resequenceTestCaseIds, ensureUniqueRequirementIds } from './utils/idGenerator';
@@ -76,6 +80,7 @@ import {
   PieChart,
   Play,
   Trash2,
+  GitBranch,
 } from 'lucide-react';
 
 const DEFAULT_TEST_RUNS: TestRun[] = [
@@ -117,6 +122,7 @@ export default function App() {
     setTestRuns(DEFAULT_TEST_RUNS);
     setStaticTestReports({});
     setStaticTestSummary(null);
+    setDiagramAnalysis(null);
     setRequirementText(SAMPLE_REQUIREMENT_DOCS[0].content);
   };
 
@@ -257,6 +263,10 @@ export default function App() {
   const [staticTestReports, setStaticTestReports] = useState<Record<string, RequirementStaticTestReport>>({});
   const [staticTestSummary, setStaticTestSummary] = useState<OverallStaticTestSummary | null>(null);
   const [isAnalyzingStaticTest, setIsAnalyzingStaticTest] = useState(false);
+  const [diagramText, setDiagramText] = useState<string>(SAMPLE_ACTIVITY_DIAGRAMS[0].content);
+  const [diagramImage, setDiagramImage] = useState<DiagramImagePayload | null>(null);
+  const [diagramStrategy, setDiagramStrategy] = useState<DiagramCoverageStrategy>('branch');
+  const [diagramAnalysis, setDiagramAnalysis] = useState<DiagramAnalysisSummary | null>(null);
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
   const [isQuotaBannerVisible, setIsQuotaBannerVisible] = useState(true);
 
@@ -540,7 +550,8 @@ export default function App() {
           existing.generationStats === generationStats &&
           existing.recommendations === recommendations &&
           existing.staticTestReports === staticTestReports &&
-          existing.staticTestSummary === staticTestSummary
+          existing.staticTestSummary === staticTestSummary &&
+          existing.diagramAnalysis === diagramAnalysis
         ) {
           return prevProjects;
         }
@@ -557,6 +568,7 @@ export default function App() {
             recommendations,
             staticTestReports,
             staticTestSummary,
+            diagramAnalysis,
             updatedAt: new Date().toISOString(),
           };
         }
@@ -594,6 +606,7 @@ export default function App() {
     setRecommendations(targetProj.recommendations || []);
     setStaticTestReports(targetProj.staticTestReports || {});
     setStaticTestSummary(targetProj.staticTestSummary || null);
+    setDiagramAnalysis(targetProj.diagramAnalysis || null);
   };
 
   const handleCreateProject = (
@@ -635,6 +648,7 @@ export default function App() {
     setRecommendations([]);
     setStaticTestReports({});
     setStaticTestSummary(null);
+    setDiagramAnalysis(null);
   };
 
   const handleUpdateProject = (
@@ -861,10 +875,86 @@ export default function App() {
       setTestCases(resequencedTestCases);
       setGenerationStats(finalStats);
       setRecommendations(finalRecs);
+      setDiagramAnalysis(null);
       setActiveTab('matrix');
     } catch (err: any) {
       console.error('Generation Error:', err);
       setErrorMessage(err.message || 'Bir hata oluştu. Lütfen tekrar deneyin.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Trigger Test Case Generation from Activity Diagram / Process Flow
+  const handleGenerateFromDiagram = async () => {
+    const effectiveDiagramText = diagramText.trim() || (!diagramImage ? SAMPLE_ACTIVITY_DIAGRAMS[0].content : '');
+    if (!diagramText.trim() && !diagramImage) {
+      setDiagramText(effectiveDiagramText);
+    }
+
+    const effectiveConfig: GenerationConfig = {
+      ...generationConfig,
+      selectedFunctionalTypes:
+        Array.isArray(generationConfig.selectedFunctionalTypes) && generationConfig.selectedFunctionalTypes.length > 0
+          ? generationConfig.selectedFunctionalTypes
+          : [
+              'Pozitif (Fonksiyonel Doğruluk)',
+              'Negatif (Hata Yönetimi)',
+              'Sınır Değer Analizi (BVA)',
+            ],
+      selectedNonFunctionalTypes:
+        Array.isArray(generationConfig.selectedNonFunctionalTypes) && generationConfig.selectedNonFunctionalTypes.length > 0
+          ? generationConfig.selectedNonFunctionalTypes
+          : ['Güvenlik ve Yetki Testi (Security)'],
+    };
+
+    setIsGenerating(true);
+    setErrorMessage(null);
+
+    try {
+      const activeCorporateRules = corporateRules.filter((r) => r.isDefaultActive);
+      const data = await safeFetchJson<GenerationResult>(
+        '/api/generate-from-diagram',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            diagramText: effectiveDiagramText,
+            diagramImageBase64: diagramImage?.base64 || undefined,
+            diagramImageMimeType: diagramImage?.mimeType || undefined,
+            diagramFileName: diagramImage?.fileName || undefined,
+            coverageStrategy: diagramStrategy,
+            templateColumns: activeTemplate.columns,
+            corporateRules: activeCorporateRules,
+            config: effectiveConfig,
+          }),
+        },
+        'Süreç diyagramı üzerinden test senaryoları üretilirken sunucu hatası oluştu.'
+      );
+
+      const finalReqs = ensureUniqueRequirementIds(data.requirements || []);
+      const { resequencedTestCases } = resequenceTestCaseIds(data.testCases || []);
+      const finalStats =
+        data.stats || calculateGenerationStats(finalReqs, resequencedTestCases);
+      const finalRecs =
+        data.recommendations && data.recommendations.length > 0
+          ? data.recommendations
+          : generateEngineeringRecommendations(
+              finalReqs,
+              resequencedTestCases,
+              generationConfig.language,
+              { action: 'initial', customInstructions: effectiveConfig.customInstructions }
+            );
+
+      setRequirements(finalReqs);
+      setTestCases(resequencedTestCases);
+      setGenerationStats(finalStats);
+      setRecommendations(finalRecs);
+      setDiagramAnalysis(data.diagramAnalysis || null);
+      setActiveTab('matrix');
+    } catch (err: any) {
+      console.error('Diagram Generation Error:', err);
+      setErrorMessage(err.message || 'Diyagram analizi sırasında bir hata oluştu.');
     } finally {
       setIsGenerating(false);
     }
@@ -1163,6 +1253,7 @@ export default function App() {
     setRecommendations([]);
     setStaticTestReports({});
     setStaticTestSummary(null);
+    setDiagramAnalysis(null);
     const defaultRuns: TestRun[] = [
       {
         id: 'RUN-1',
@@ -1188,6 +1279,7 @@ export default function App() {
               recommendations: [],
               staticTestReports: {},
               staticTestSummary: null,
+              diagramAnalysis: null,
               updatedAt: new Date().toISOString(),
             }
           : p
@@ -1311,7 +1403,75 @@ export default function App() {
           isAnalyzingStaticTest={isAnalyzingStaticTest}
           staticTestSummary={staticTestSummary}
           onOpenStaticTestTab={() => setActiveTab('static-test')}
+          diagramText={diagramText}
+          onChangeDiagramText={setDiagramText}
+          diagramImage={diagramImage}
+          onChangeDiagramImage={setDiagramImage}
+          diagramStrategy={diagramStrategy}
+          onChangeDiagramStrategy={setDiagramStrategy}
+          onGenerateFromDiagram={handleGenerateFromDiagram}
         />
+
+        {/* Extracted Activity Diagram Path Traceability Summary */}
+        {diagramAnalysis && diagramAnalysis.paths && diagramAnalysis.paths.length > 0 && testCases.length > 0 && (
+          <section className="bg-[#0D1117] border border-white/10 rounded-2xl p-4 sm:p-5 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <GitBranch className="w-4 h-4 text-blue-400 shrink-0" />
+                <h3 className="text-sm font-semibold text-white truncate">
+                  {diagramAnalysis.processTitle}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-400 tabular-nums whitespace-nowrap shrink-0">
+                <span>{diagramAnalysis.nodeCount} {generationConfig.language === 'en' ? 'nodes' : 'düğüm'}</span>
+                <span aria-hidden="true">·</span>
+                <span>{diagramAnalysis.decisionCount} {generationConfig.language === 'en' ? 'decisions' : 'karar noktası'}</span>
+                <span aria-hidden="true">·</span>
+                <span>{diagramAnalysis.paths.length} {generationConfig.language === 'en' ? 'process paths' : 'süreç yolu'}</span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-medium">
+                    <th className="py-2 pr-3 whitespace-nowrap">{generationConfig.language === 'en' ? 'Path' : 'Yol No'}</th>
+                    <th className="py-2 pr-3 whitespace-nowrap">{generationConfig.language === 'en' ? 'Flow Ref' : 'Akış ID'}</th>
+                    <th className="py-2 pr-3">{generationConfig.language === 'en' ? 'Branch & Decision Route' : 'Süreç Dalı & Karar Rotası'}</th>
+                    <th className="py-2 whitespace-nowrap">{generationConfig.language === 'en' ? 'Type' : 'Tür'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {diagramAnalysis.paths.map((p) => (
+                    <tr key={p.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="py-2 pr-3 font-mono text-slate-300 tabular-nums whitespace-nowrap">{p.id}</td>
+                      <td className="py-2 pr-3 font-mono text-blue-400 tabular-nums whitespace-nowrap">{p.linkedReqId}</td>
+                      <td className="py-2 pr-3 text-slate-200">
+                        <div className="font-medium">{p.name}</div>
+                        {p.nodes && p.nodes.length > 0 && (
+                          <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-2xl">
+                            {p.nodes.join(' → ')}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2 whitespace-nowrap text-slate-300">
+                        {p.pathType === 'happy'
+                          ? generationConfig.language === 'en' ? 'Happy Path' : 'Ana Akış'
+                          : p.pathType === 'negative'
+                          ? generationConfig.language === 'en' ? 'Negative / Exception' : 'Hata / Red'
+                          : p.pathType === 'loop'
+                          ? generationConfig.language === 'en' ? 'Loop / Retry' : 'Döngü'
+                          : p.pathType === 'parallel'
+                          ? generationConfig.language === 'en' ? 'Parallel Fork' : 'Paralel Dal'
+                          : generationConfig.language === 'en' ? 'Decision Branch' : 'Karar Dalı'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
 
         {/* Results Navigation Tabs & Views */}
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-3 duration-300">

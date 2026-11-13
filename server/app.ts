@@ -2,11 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import express from 'express';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import {
   generateEngineeringRecommendations,
   calculateGenerationStats,
 } from './engineeringEvaluation.ts';
+import { analyzeDiagramAndGenerateTests } from './diagramEngine.ts';
 
 const app = express();
 
@@ -441,13 +442,12 @@ async function callGeminiWithRetry(ai: GoogleGenAI, params: any) {
     );
   }
 
-  const requestedModel = params.model || 'gemini-3.1-flash-lite';
+  const requestedModel = params.model || 'gemini-4-hydrogen';
   const candidateModels = Array.from(
     new Set([
       requestedModel,
+      'gemini-4-hydrogen',
       'gemini-3.1-flash-lite',
-      'gemini-3.8-flash',
-      'gemini-flash-latest',
     ])
   );
 
@@ -456,9 +456,18 @@ async function callGeminiWithRetry(ai: GoogleGenAI, params: any) {
   for (const model of candidateModels) {
     try {
       console.log(`[Gemini API] Invoking model '${model}'...`);
+      const nextConfig = params.config ? { ...params.config } : undefined;
+      if (nextConfig && model.startsWith('gemini-4-')) {
+        delete nextConfig.temperature;
+        delete nextConfig.topP;
+        delete nextConfig.topK;
+        delete nextConfig.candidateCount;
+        nextConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      }
       const response = await ai.models.generateContent({
         ...params,
         model,
+        ...(nextConfig ? { config: nextConfig } : {}),
       });
       return { response, modelUsed: model };
     } catch (err: any) {
@@ -538,7 +547,7 @@ async function generateUnifiedAI({
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
       });
 
-      const geminiModel = preferredModel && !isOpenRouterPreferred ? preferredModel : 'gemini-3.8-flash';
+      const geminiModel = preferredModel && !isOpenRouterPreferred ? preferredModel : 'gemini-4-hydrogen';
 
       const geminiPromise = callGeminiWithRetry(ai, {
         model: geminiModel,
@@ -3712,6 +3721,56 @@ Return ONLY valid JSON:
     console.error('Static test requirements error:', error);
     res.status(500).json({
       error: 'Gereksinim statik testi yapılırken bir hata oluştu.',
+      details: error?.message,
+    });
+  }
+});
+
+// Endpoint: Generate Test Cases from Activity Diagram / Process Drawing
+app.post('/api/generate-from-diagram', async (req, res) => {
+  try {
+    const {
+      diagramText,
+      diagramImageBase64,
+      diagramImageMimeType,
+      diagramFileName,
+      coverageStrategy = 'branch',
+      corporateRules = [],
+      config = {},
+    } = req.body || {};
+
+    const hasText = typeof diagramText === 'string' && diagramText.trim().length > 0;
+    const hasImage = typeof diagramImageBase64 === 'string' && diagramImageBase64.trim().length > 0;
+
+    if (!hasText && !hasImage) {
+      return res.status(400).json({
+        error: 'Lütfen bir Activity Diagram / süreç çizimi görseli yükleyin veya Mermaid/PlantUML akış metni girin.',
+      });
+    }
+
+    const isTurkish = config?.language !== 'en';
+    const result = await analyzeDiagramAndGenerateTests({
+      diagramText,
+      diagramImageBase64,
+      diagramImageMimeType,
+      diagramFileName,
+      coverageStrategy,
+      corporateRules,
+      config,
+      isTurkish,
+      callOpenRouterFallback: ({ systemPrompt, userPrompt, timeoutMs }) =>
+        callOpenRouterWithFallback({ systemPrompt, userPrompt, timeoutMs }),
+      isAllQuotaExhausted: isAllAIQuotaExhausted,
+      isGeminiQuotaExhausted,
+      markGeminiQuotaExhausted,
+      checkIsQuotaExhaustedError,
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('[Diagram Generate Error]', error);
+    res.status(500).json({
+      error: 'Süreç diyagramı analiz edilip test case üretilirken bir sunucu hatası oluştu.',
       details: error?.message,
     });
   }

@@ -25,6 +25,30 @@ export interface Project {
   recommendations?: string[];
   staticTestReports?: Record<string, RequirementStaticTestReport>;
   staticTestSummary?: OverallStaticTestSummary | null;
+  diagramAnalysis?: DiagramAnalysisSummary | null;
+}
+
+export type DiagramFormat = 'image' | 'mermaid' | 'plantuml' | 'bpmn_xml' | 'text_flow';
+
+export type DiagramCoverageStrategy = 'branch' | 'basis_path' | 'full_e2e';
+
+export interface DiagramPathInfo {
+  id: string;
+  name: string;
+  pathType: 'happy' | 'negative' | 'decision' | 'loop' | 'parallel';
+  nodes: string[];
+  conditions: string[];
+  linkedReqId: string;
+}
+
+export interface DiagramAnalysisSummary {
+  processTitle: string;
+  formatDetected: DiagramFormat;
+  nodeCount: number;
+  decisionCount: number;
+  swimlanes: string[];
+  paths: DiagramPathInfo[];
+  analyzedAt?: string;
 }
 
 
@@ -177,6 +201,7 @@ export interface GenerationResult {
   testCases: TestCase[];
   stats: GenerationStats;
   recommendations?: string[];
+  diagramAnalysis?: DiagramAnalysisSummary;
 }
 
 export interface SampleRequirementDoc {
