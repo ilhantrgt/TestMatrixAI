@@ -248,42 +248,82 @@ function generateEngineeringRecommendations(requirements, testCases, language = 
 // server/diagramEngine.ts
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 var NEGATIVE_BRANCH_REGEX = /\b(hayır|hayir|no|false|fail|failed|error|hata|red|reject|rejected|iptal|cancel|geçersiz|gecersiz|invalid|blocked|bloke|timeout|zaman\s*aşım|yetersiz|yetkisiz|forbidden|400|401|403|404|409|422|500|503|başarısız|basarisiz|eksik|ret|süre\s*doldu)\b/i;
+function decodeHtmlEntities(input) {
+  let out = input;
+  for (let pass = 0; pass < 4; pass++) {
+    const prev = out;
+    out = out.replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&apos;|&#0*39;/gi, "'").replace(/&nbsp;/gi, " ").replace(/&#x([0-9a-f]+);?/gi, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) && code >= 32 ? String.fromCodePoint(code) : " ";
+    }).replace(/&#(\d+);?/g, (_, dec) => {
+      const code = parseInt(dec, 10);
+      return Number.isFinite(code) && code >= 32 ? String.fromCodePoint(code) : " ";
+    }).replace(/&lt(?=[/\w!])/gi, "<").replace(/&gt(?![a-z0-9])/gi, ">").replace(/(<\/?[a-zA-Z][a-zA-Z0-9:-]*)&gt/gi, "$1>");
+    if (out === prev) break;
+  }
+  return out;
+}
+var KNOWN_HTML_TAGS = "div|span|p|br|hr|b|strong|i|em|u|s|font|li|ul|ol|dl|dt|dd|table|thead|tbody|tr|td|th|h[1-6]|pre|code|blockquote|section|article|header|footer|center|small|sub|sup|a|img|svg|path|g|rect|circle|text|tspan|foreignObject|body|html";
+var UNCLOSED_HTML_TAG_RE = new RegExp(
+  `<\\/?(?:${KNOWN_HTML_TAGS})(?:\\s+(?:style|class|id|align|color|face|size|href|src|width|height|data-[a-z0-9-]+)\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]*))*(?:\\s*\\/?>|\\b)`,
+  "gi"
+);
+function sanitizeDiagramLabel(raw) {
+  if (!raw) return "";
+  let s = decodeHtmlEntities(String(raw));
+  s = s.replace(/<\s*br\s*\/?>/gi, " ").replace(UNCLOSED_HTML_TAG_RE, " ").replace(/<\/?[a-zA-Z!][a-zA-Z0-9:-]*(?:\s+[^>]*)?\/?>/g, " ").replace(/<\/?[a-zA-Z]{1,12}(?:\s+[^>]*)?$/g, " ").replace(/^[a-zA-Z]{1,12}>/g, " ");
+  s = decodeHtmlEntities(s).replace(/<\s*br\s*\/?>/gi, " ").replace(UNCLOSED_HTML_TAG_RE, " ").replace(/<\/?[a-zA-Z!][a-zA-Z0-9:-]*(?:\s+[^>]*)?\/?>/g, " ").replace(/\\n|\\r|\\t/g, " ").replace(/\s+/g, " ").trim();
+  if (s.length >= 2 && (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+function parseXmlAttributes(attrStr) {
+  const attrs = {};
+  const re = /([a-zA-Z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  let m;
+  while ((m = re.exec(attrStr)) !== null) {
+    attrs[m[1]] = m[2] ?? m[3] ?? "";
+  }
+  return attrs;
+}
 function cleanNodeShape(raw) {
   const s = raw.trim();
   if (/^\(\[.*\]\)$/.test(s) || /^\(\(.*\)\)$/.test(s)) {
-    const inner = s.replace(/^\(\[|\(\(|\)\)|\]\)$/g, "").trim();
+    const inner = sanitizeDiagramLabel(s.replace(/^\(\[|\(\(|\)\)|\]\)$/g, ""));
     const isEnd2 = /bitiş|bitis|end|son|tamamland|iptal|bloke|red|onayland|forbidden|yetersiz|oluşturuldu|gönderildi/i.test(inner);
     const isStart2 = /başla|basla|start|giriş|tetik/i.test(inner);
     return { label: inner, type: isStart2 ? "start" : isEnd2 ? "end" : "start" };
   }
   if (/^\{\{.*\}\}$/.test(s) || /^\{.*\}$/.test(s)) {
-    return { label: s.replace(/^\{\{?|\}?\}\}$/g, "").trim(), type: "decision" };
+    return { label: sanitizeDiagramLabel(s.replace(/^\{\{?|\}?\}\}$/g, "")), type: "decision" };
   }
   if (/^\[\[.*\]\]$/.test(s)) {
-    return { label: s.replace(/^\[\[|\]\]$/g, "").trim(), type: "fork_join" };
+    return { label: sanitizeDiagramLabel(s.replace(/^\[\[|\]\]$/g, "")), type: "fork_join" };
   }
   if (/^\[\(.*\)\]$/.test(s)) {
-    return { label: s.replace(/^\[\(|\)\]$/g, "").trim(), type: "action" };
+    return { label: sanitizeDiagramLabel(s.replace(/^\[\(|\)\]$/g, "")), type: "action" };
   }
   if (/^\[\/.*\/\]$/.test(s) || /^\[\\.*\\\]$/.test(s)) {
-    return { label: s.replace(/^\[[\/\\]|[\/\\]\]$/g, "").trim(), type: "action" };
+    return { label: sanitizeDiagramLabel(s.replace(/^\[[\/\\]|[\/\\]\]$/g, "")), type: "action" };
   }
   if (/^\[.*\]$/.test(s) || /^\(.*\)$/.test(s)) {
-    const inner = s.replace(/^\[|\(|\]|\)$/g, "").trim();
+    const inner = sanitizeDiagramLabel(s.replace(/^\[|\(|\]|\)$/g, ""));
     const isDecision2 = inner.endsWith("?") || /^(if|eğer|kontrol)\s+/i.test(inner);
     return { label: inner, type: isDecision2 ? "decision" : "action" };
   }
-  const isDecision = s.endsWith("?") || /^(if|eğer)\s+/i.test(s);
-  const isEnd = /^(end|bitiş|bitis|stop|finish|son)$/i.test(s);
-  const isStart = /^(start|başla|basla|başlangıç|baslangic)$/i.test(s);
+  const cleanS = sanitizeDiagramLabel(s);
+  const isDecision = cleanS.endsWith("?") || /^(if|eğer)\s+/i.test(cleanS);
+  const isEnd = /^(end|bitiş|bitis|stop|finish|son)$/i.test(cleanS);
+  const isStart = /^(start|başla|basla|başlangıç|baslangic)$/i.test(cleanS);
   return {
-    label: s,
+    label: cleanS,
     type: isStart ? "start" : isEnd ? "end" : isDecision ? "decision" : "action"
   };
 }
 function detectDiagramFormat(rawText) {
   const t = (rawText || "").trim();
-  if (/<bpmn:|<definitions|<mxGraphModel|<mxCell/i.test(t)) return "bpmn_xml";
+  if (/<bpmn:|<definitions|<mxGraphModel|<mxCell|<UserObject/i.test(t)) return "bpmn_xml";
   if (/@startuml|@enduml|:[^;]+;\s*$/m.test(t)) return "plantuml";
   if (/^\s*(flowchart|graph|stateDiagram)/im.test(t) || /-->|-\.->|==>/.test(t)) return "mermaid";
   return "text_flow";
@@ -326,45 +366,104 @@ function parseActivityDiagramText(rawText) {
     return id;
   };
   if (formatDetected === "bpmn_xml") {
-    const taskMatches = text.matchAll(
-      /<(?:bpmn:)?(startEvent|endEvent|task|userTask|serviceTask|scriptTask|exclusiveGateway|inclusiveGateway|parallelGateway|subProcess|mxCell)[^>]*?(?:id="([^"]*)")?[^>]*?(?:name|value)="([^"]+)"/gi
-    );
-    let seq = 0;
-    for (const m of taskMatches) {
-      const tag = m[1].toLowerCase();
-      const id = m[2] || `n_${++seq}`;
-      const label = m[3].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-      if (!label) continue;
-      let type = "action";
-      if (tag.includes("start")) type = "start";
-      else if (tag.includes("end")) type = "end";
-      else if (tag.includes("exclusive") || tag.includes("inclusive") || label.endsWith("?")) type = "decision";
-      else if (tag.includes("parallel")) type = "fork_join";
-      nodeMap.set(id, { id, label, type });
-    }
-    const flowMatches = text.matchAll(
-      /<(?:bpmn:)?sequenceFlow[^>]*?sourceRef="([^"]+)"[^>]*?targetRef="([^"]+)"(?:[^>]*?name="([^"]*)")?/gi
-    );
-    for (const fm of flowMatches) {
-      const label = fm[3]?.trim() || void 0;
-      edges.push({
-        from: fm[1],
-        to: fm[2],
-        label,
-        isNegative: label ? NEGATIVE_BRANCH_REGEX.test(label) : false
+    const isDrawio = /<mxGraphModel|<mxCell|<UserObject/i.test(text);
+    if (isDrawio) {
+      const swimlaneById = /* @__PURE__ */ new Map();
+      const edgeById = /* @__PURE__ */ new Map();
+      const pendingEdgeLabels = [];
+      const handleMxCellRecord = (attrs) => {
+        const id = attrs.id || `cell_${nodeMap.size + edges.length + 1}`;
+        const rawVal = attrs.label || attrs.value || attrs.name || "";
+        const label = sanitizeDiagramLabel(rawVal);
+        const style = (attrs.style || "").toLowerCase();
+        const isEdge = attrs.edge === "1" || Boolean(attrs.source) && Boolean(attrs.target);
+        if (isEdge && attrs.source && attrs.target) {
+          const edgeObj = {
+            from: attrs.source,
+            to: attrs.target,
+            label: label || void 0,
+            isNegative: label ? NEGATIVE_BRANCH_REGEX.test(label) : false
+          };
+          edges.push(edgeObj);
+          edgeById.set(id, edgeObj);
+          return;
+        }
+        if (style.includes("edgelabel") && attrs.parent && label) {
+          pendingEdgeLabels.push({ parentId: attrs.parent, label });
+          return;
+        }
+        if (style.includes("swimlane") && label) {
+          swimlaneById.set(id, label);
+          swimlanesSet.add(label);
+          return;
+        }
+        if ((id === "0" || id === "1") && !label) return;
+        if (!label) return;
+        let type = "action";
+        if (style.includes("rhombus") || label.endsWith("?") || /^(if|eğer|kontrol)\b/i.test(label)) {
+          type = "decision";
+        } else if (style.includes("ellipse") || style.includes("terminator")) {
+          type = /bitiş|bitis|end|son|tamamland|iptal|bloke|red|hata/i.test(label) ? "end" : "start";
+        } else if (/^(başla|basla|start|başlangıç)/i.test(label)) {
+          type = "start";
+        } else if (/^(bitiş|bitis|end|stop|son|iptal|red)/i.test(label)) {
+          type = "end";
+        }
+        const parentLane = attrs.parent ? swimlaneById.get(attrs.parent) : void 0;
+        nodeMap.set(id, { id, label, type, swimlane: parentLane });
+      };
+      let remainingXml = text.replace(
+        /<(?:UserObject|object)\b([^>]*)>\s*(?:<mxCell\b([^>]*)\/?>)?[\s\S]*?<\/(?:UserObject|object)>/gi,
+        (_, wrapperAttrsStr, innerCellAttrsStr) => {
+          const merged = {
+            ...parseXmlAttributes(innerCellAttrsStr || ""),
+            ...parseXmlAttributes(wrapperAttrsStr || "")
+          };
+          handleMxCellRecord(merged);
+          return "";
+        }
+      );
+      const mxMatches = remainingXml.matchAll(/<mxCell\b([^>]*)>/gi);
+      for (const m of mxMatches) {
+        handleMxCellRecord(parseXmlAttributes(m[1] || ""));
+      }
+      pendingEdgeLabels.forEach(({ parentId, label }) => {
+        const targetEdge = edgeById.get(parentId);
+        if (targetEdge) {
+          targetEdge.label = targetEdge.label ? `${targetEdge.label} ${label}` : label;
+          targetEdge.isNegative = NEGATIVE_BRANCH_REGEX.test(targetEdge.label);
+        }
       });
-    }
-    const mxEdgeMatches = text.matchAll(
-      /<mxCell[^>]*?edge="1"[^>]*?(?:value="([^"]*)")?[^>]*?source="([^"]+)"[^>]*?target="([^"]+)"[^>]*?>/gi
-    );
-    for (const me of mxEdgeMatches) {
-      const label = me[1]?.replace(/<[^>]+>/g, " ").trim() || void 0;
-      edges.push({
-        from: me[2],
-        to: me[3],
-        label,
-        isNegative: label ? NEGATIVE_BRANCH_REGEX.test(label) : false
-      });
+    } else {
+      const bpmnTagMatches = text.matchAll(
+        /<(?:bpmn:)?(startEvent|endEvent|task|userTask|serviceTask|scriptTask|exclusiveGateway|inclusiveGateway|parallelGateway|subProcess)\b([^>]*)>/gi
+      );
+      let seq = 0;
+      for (const m of bpmnTagMatches) {
+        const tag = m[1].toLowerCase();
+        const attrs = parseXmlAttributes(m[2] || "");
+        const id = attrs.id || `n_${++seq}`;
+        const label = sanitizeDiagramLabel(attrs.name || attrs.value || "");
+        if (!label) continue;
+        let type = "action";
+        if (tag.includes("start")) type = "start";
+        else if (tag.includes("end")) type = "end";
+        else if (tag.includes("exclusive") || tag.includes("inclusive") || label.endsWith("?")) type = "decision";
+        else if (tag.includes("parallel")) type = "fork_join";
+        nodeMap.set(id, { id, label, type });
+      }
+      const seqFlowMatches = text.matchAll(/<(?:bpmn:)?sequenceFlow\b([^>]*)>/gi);
+      for (const fm of seqFlowMatches) {
+        const attrs = parseXmlAttributes(fm[1] || "");
+        if (!attrs.sourceRef || !attrs.targetRef) continue;
+        const label = sanitizeDiagramLabel(attrs.name || "") || void 0;
+        edges.push({
+          from: attrs.sourceRef,
+          to: attrs.targetRef,
+          label,
+          isNegative: label ? NEGATIVE_BRANCH_REGEX.test(label) : false
+        });
+      }
     }
   } else if (formatDetected === "plantuml") {
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -375,13 +474,13 @@ function parseActivityDiagramText(rawText) {
       if (line.startsWith("@") || line.startsWith("'")) continue;
       const titleMatch = line.match(/^title\s+(.+)/i);
       if (titleMatch) {
-        processTitle = titleMatch[1].trim();
+        processTitle = sanitizeDiagramLabel(titleMatch[1]);
         continue;
       }
       const swimMatch = line.match(/^\|([^|]+)\|$/) || line.match(/^partition\s+"?([^"{]+)"?\s*\{?$/i);
       if (swimMatch) {
-        currentSwimlane = swimMatch[1].trim();
-        swimlanesSet.add(currentSwimlane);
+        currentSwimlane = sanitizeDiagramLabel(swimMatch[1]);
+        if (currentSwimlane) swimlanesSet.add(currentSwimlane);
         continue;
       }
       if (line === "}") {
@@ -404,7 +503,8 @@ function parseActivityDiagramText(rawText) {
       const ifMatch = line.match(/^(?:else)?if\s*\(([^)]+)\)\s*then\s*(?:\(([^)]+)\))?/i);
       if (ifMatch) {
         const decId = `Dec_${++seq}`;
-        nodeMap.set(decId, { id: decId, label: ifMatch[1].trim(), type: "decision", swimlane: currentSwimlane });
+        const decLabel = sanitizeDiagramLabel(ifMatch[1]);
+        nodeMap.set(decId, { id: decId, label: decLabel || decId, type: "decision", swimlane: currentSwimlane });
         if (/^elseif/i.test(line) && branchStack.length > 0) {
           const top = branchStack[branchStack.length - 1];
           if (prevId && prevId !== top.decisionId) top.branchEnds.push(prevId);
@@ -414,7 +514,7 @@ function parseActivityDiagramText(rawText) {
         }
         branchStack.push({
           decisionId: decId,
-          pendingLabel: ifMatch[2]?.trim() || "Evet",
+          pendingLabel: sanitizeDiagramLabel(ifMatch[2] || "") || "Evet",
           branchEnds: []
         });
         prevId = decId;
@@ -424,7 +524,7 @@ function parseActivityDiagramText(rawText) {
       if (elseMatch && branchStack.length > 0) {
         const top = branchStack[branchStack.length - 1];
         if (prevId && prevId !== top.decisionId) top.branchEnds.push(prevId);
-        top.pendingLabel = elseMatch[1]?.trim() || "Hay\u0131r";
+        top.pendingLabel = sanitizeDiagramLabel(elseMatch[1] || "") || "Hay\u0131r";
         prevId = top.decisionId;
         continue;
       }
@@ -443,7 +543,8 @@ function parseActivityDiagramText(rawText) {
       const repeatWhileMatch = line.match(/^repeat\s+while\s*\(([^)]+)\)/i);
       if (repeatWhileMatch && prevId) {
         const loopDecId = `Loop_${++seq}`;
-        nodeMap.set(loopDecId, { id: loopDecId, label: repeatWhileMatch[1].trim(), type: "decision", swimlane: currentSwimlane });
+        const loopLabel = sanitizeDiagramLabel(repeatWhileMatch[1]);
+        nodeMap.set(loopDecId, { id: loopDecId, label: loopLabel || loopDecId, type: "decision", swimlane: currentSwimlane });
         edges.push({ from: prevId, to: loopDecId });
         const startLoopTarget = Array.from(nodeMap.values()).find((n) => n.type === "action")?.id;
         if (startLoopTarget) {
@@ -455,7 +556,8 @@ function parseActivityDiagramText(rawText) {
       const actMatch = line.match(/^:(.+);$/);
       if (actMatch) {
         const actId = `Act_${++seq}`;
-        const actLabel = actMatch[1].trim();
+        const actLabel = sanitizeDiagramLabel(actMatch[1]);
+        if (!actLabel) continue;
         nodeMap.set(actId, {
           id: actId,
           label: actLabel,
@@ -483,16 +585,16 @@ function parseActivityDiagramText(rawText) {
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const sequentialStepIds = [];
     for (const line of lines) {
-      if (/^(flowchart|graph|stateDiagram|%%)/i.test(line)) continue;
+      if (/^(?:flowchart|graph|stateDiagram|%%|style\s+|classDef\s+|class\s+|linkStyle\s+|click\s+|direction\s+)/i.test(line)) continue;
       const titleMatch = line.match(/^(?:title|Başlık|Süreç)\s*:\s*(.+)/i);
       if (titleMatch) {
-        processTitle = titleMatch[1].trim();
+        processTitle = sanitizeDiagramLabel(titleMatch[1]);
         continue;
       }
       const subMatch = line.match(/^subgraph\s+(?:[a-zA-Z0-9_\-]+\s*\[)?([^\]\n"]+|"[^"]+")\]?/i);
       if (subMatch) {
-        currentSwimlane = subMatch[1].replace(/^"|"$/g, "").trim();
-        swimlanesSet.add(currentSwimlane);
+        currentSwimlane = sanitizeDiagramLabel(subMatch[1]);
+        if (currentSwimlane) swimlanesSet.add(currentSwimlane);
         continue;
       }
       if (/^end$/i.test(line)) {
@@ -508,7 +610,7 @@ function parseActivityDiagramText(rawText) {
         while ((match = arrowRegex.exec(line)) !== null) {
           const leftToken = line.slice(lastIdx, match.index).trim();
           const inlineLabelMatch = match[0].match(/(?:--|\-\.)\s*([^->]+?)\s*(?:-->|\.->)/);
-          const edgeLabel = (match[1] || inlineLabelMatch?.[1] || "").trim() || void 0;
+          const edgeLabel = sanitizeDiagramLabel(match[1] || inlineLabelMatch?.[1] || "") || void 0;
           segments.push({ token: leftToken, edgeLabel });
           lastIdx = arrowRegex.lastIndex;
         }
@@ -532,7 +634,7 @@ function parseActivityDiagramText(rawText) {
           }
         }
       } else if (/^(?:\d+[\.\)]|Adım\s*\d+:?)\s+/i.test(line)) {
-        const cleanedStep = line.replace(/^(?:\d+[\.\)]|Adım\s*\d+:?)\s+/i, "").trim();
+        const cleanedStep = sanitizeDiagramLabel(line.replace(/^(?:\d+[\.\)]|Adım\s*\d+:?)\s+/i, ""));
         if (cleanedStep) {
           const stepId = `Step_${sequentialStepIds.length + 1}`;
           ensureNode(stepId, cleanedStep);
@@ -1190,21 +1292,24 @@ RULES:
   }
   const nodes = extracted.nodes.map((n, idx) => ({
     id: String(n.id || `N_${idx + 1}`).trim(),
-    label: String(n.label || n.id || `Ad\u0131m ${idx + 1}`).trim(),
+    label: sanitizeDiagramLabel(n.label || n.id || `Ad\u0131m ${idx + 1}`) || `Ad\u0131m ${idx + 1}`,
     type: ["start", "end", "action", "decision", "fork_join"].includes(n.type) ? n.type : "action",
-    swimlane: n.swimlane ? String(n.swimlane).trim() : void 0
+    swimlane: n.swimlane ? sanitizeDiagramLabel(n.swimlane) || void 0 : void 0
   }));
-  const edges = Array.isArray(extracted.edges) ? extracted.edges.map((e) => ({
-    from: String(e.from || "").trim(),
-    to: String(e.to || "").trim(),
-    label: e.label ? String(e.label).trim() : void 0,
-    isNegative: typeof e.isNegative === "boolean" ? e.isNegative : e.label ? NEGATIVE_BRANCH_REGEX.test(String(e.label)) : false
-  })).filter((e) => e.from && e.to) : [];
+  const edges = Array.isArray(extracted.edges) ? extracted.edges.map((e) => {
+    const cleanEdgeLabel = e.label ? sanitizeDiagramLabel(e.label) || void 0 : void 0;
+    return {
+      from: String(e.from || "").trim(),
+      to: String(e.to || "").trim(),
+      label: cleanEdgeLabel,
+      isNegative: typeof e.isNegative === "boolean" ? e.isNegative : cleanEdgeLabel ? NEGATIVE_BRANCH_REGEX.test(cleanEdgeLabel) : false
+    };
+  }).filter((e) => e.from && e.to) : [];
   const paths = enumerateProcessPaths(nodes, edges);
-  const swimlanes = Array.isArray(extracted.swimlanes) ? extracted.swimlanes.map((s) => String(s).trim()).filter(Boolean) : Array.from(new Set(nodes.map((n) => n.swimlane).filter((s) => Boolean(s))));
+  const swimlanes = Array.isArray(extracted.swimlanes) ? extracted.swimlanes.map((s) => sanitizeDiagramLabel(s)).filter(Boolean) : Array.from(new Set(nodes.map((n) => n.swimlane).filter((s) => Boolean(s))));
   return {
     formatDetected: "image",
-    processTitle: String(extracted.processTitle || diagramFileName || "G\xF6rsel S\xFCre\xE7 Diyagram\u0131").replace(/\.[^.]+$/, ""),
+    processTitle: sanitizeDiagramLabel(extracted.processTitle || diagramFileName || "G\xF6rsel S\xFCre\xE7 Diyagram\u0131").replace(/\.[^.]+$/, ""),
     swimlanes,
     nodes,
     edges,
@@ -1408,29 +1513,30 @@ ${secNegPrompt}`,
         const candidateReqId = String(tc.reqId || "").trim();
         const resolvedReqId = validReqSet.has(candidateReqId) ? candidateReqId : finalRequirements[idx % finalRequirements.length]?.id || "FLOW-01";
         const steps = Array.isArray(tc.steps) && tc.steps.length > 0 ? tc.steps.map((s, sIdx) => {
-          const clean = String(s || "").trim();
-          return /^\d+[\.\)]\s*/.test(clean) ? clean : `${sIdx + 1}. ${clean}`;
+          const clean = sanitizeDiagramLabel(String(s || ""));
+          return /^\d+[\.\)]\s*/.test(clean) ? clean : `${sIdx + 1}. ${clean || "Ad\u0131m\u0131 y\xFCr\xFCt\xFCn."}`;
         }) : ["1. S\xFCreci ba\u015Flat\u0131n.", "2. Karar ko\u015Fulunu do\u011Frulay\u0131n."];
-        const overallExp = tc.expectedResult || (isTurkish ? "S\xFCre\xE7 beklenen hedef d\xFC\u011F\xFCme hatas\u0131z ula\u015Fmal\u0131d\u0131r." : "Process reaches expected node.");
+        const overallExp = sanitizeDiagramLabel(tc.expectedResult || "") || (isTurkish ? "S\xFCre\xE7 beklenen hedef d\xFC\u011F\xFCme hatas\u0131z ula\u015Fmal\u0131d\u0131r." : "Process reaches expected node.");
         const stepExpectedResults = steps.map((st, sIdx) => {
           const provided = Array.isArray(tc.stepExpectedResults) ? tc.stepExpectedResults[sIdx] : "";
           if (provided && String(provided).trim()) {
-            const clean = String(provided).trim();
+            const clean = sanitizeDiagramLabel(String(provided));
             return /^\d+[\.\)]\s*/.test(clean) ? clean : `${sIdx + 1}. ${clean}`;
           }
           if (sIdx === steps.length - 1) return `${sIdx + 1}. ${overallExp.replace(/^\d+[\.\)]\s*/, "")}`;
           return `${sIdx + 1}. ${st.replace(/^\d+[\.\)]\s*/, "")} ad\u0131m\u0131 ba\u015Far\u0131yla tamamlanmal\u0131d\u0131r.`;
         });
+        const cleanTitle = sanitizeDiagramLabel(tc.title || "") || `S\xFCre\xE7 Senaryosu ${idx + 1}`;
         return {
           id: tc.id || `TC-${resolvedReqId}-${String(idx + 1).padStart(2, "0")}`,
           reqId: resolvedReqId,
-          module: tc.module || workingGraph.processTitle || "S\xFCre\xE7 Ak\u0131\u015F\u0131",
-          title: tc.title || `S\xFCre\xE7 Senaryosu ${idx + 1}`,
-          description: tc.description || tc.title || "",
-          preconditions: tc.preconditions || (isTurkish ? "Sistem aktif ve s\xFCre\xE7 \xF6n ko\u015Fullar\u0131 haz\u0131r olmal\u0131d\u0131r." : "System active."),
+          module: sanitizeDiagramLabel(tc.module || "") || workingGraph.processTitle || "S\xFCre\xE7 Ak\u0131\u015F\u0131",
+          title: cleanTitle,
+          description: sanitizeDiagramLabel(tc.description || "") || cleanTitle,
+          preconditions: sanitizeDiagramLabel(tc.preconditions || "") || (isTurkish ? "Sistem aktif ve s\xFCre\xE7 \xF6n ko\u015Fullar\u0131 haz\u0131r olmal\u0131d\u0131r." : "System active."),
           steps,
           stepExpectedResults,
-          testData: tc.testData || (isTurkish ? "S\xFCre\xE7 karar ve do\u011Frulama verisi" : "Process test data"),
+          testData: sanitizeDiagramLabel(tc.testData || "") || (isTurkish ? "S\xFCre\xE7 karar ve do\u011Frulama verisi" : "Process test data"),
           expectedResult: overallExp,
           priority: tc.priority || "Y\xFCksek",
           testType: tc.testType || "Pozitif (Fonksiyonel Do\u011Fruluk)",
